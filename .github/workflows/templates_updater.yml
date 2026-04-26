@@ -1,9 +1,9 @@
 name: Pull molecular templates header updates
 on:
   workflow_dispatch: ~
-  schedule:
+  #schedule:
     # Run every Sunday at 00:00 UTC
-    - cron: '0 0 * * 6'
+    #- cron: '0 0 * * 6'
 
 permissions:
   contents: write
