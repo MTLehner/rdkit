@@ -99,16 +99,17 @@ class RDKIT_DASHTREE_EXPORT DASHTree {
     \param properties the property columns to resolve; empty means every column
            in the file
     \param prefetch read through the mapped arrays once, so later queries do not
-           pay page faults. Useful before a benchmark or a large batch; pointless
-           for a handful of molecules, which is the case mapping is there for.
+           pay page faults. Useful before a benchmark or a large batch;
+    pointless for a handful of molecules, which is the case mapping is there
+    for.
 
     \throws BadFileException if the file cannot be opened or is not a container
     \throws ValueErrorException if it is corrupt or lacks a requested property
   */
-  DASHTree(const std::string &filename,
-           const std::vector<std::string> &properties =
-               std::vector<std::string>(),
-           bool prefetch = false);
+  DASHTree(
+      const std::string &filename,
+      const std::vector<std::string> &properties = std::vector<std::string>(),
+      bool prefetch = false);
   ~DASHTree();
 
   DASHTree(const DASHTree &) = delete;
@@ -128,7 +129,8 @@ class RDKIT_DASHTREE_EXPORT DASHTree {
   bool hasProperty(const std::string &name) const;
   //! path the tree was mapped from
   const std::string &filename() const;
-  //! \brief does the file carry the map back to the source tree's node numbering
+  //! \brief does the file carry the map back to the source tree's node
+  //! numbering
   /*!
     The container renumbers nodes breadth-first, which is what lets a node's
     children be a contiguous range. The original numbering is kept as an extra
@@ -187,7 +189,8 @@ class RDKIT_DASHTREE_EXPORT DASHTree {
   /*!
     \param res         normalised charges
     \param rawValues   the values straight out of the tree, before normalisation
-    \param stds        the deviations used, after \c defaultStdValue substitution
+    \param stds        the deviations used, after \c defaultStdValue
+    substitution
     \param matchDepths how deep each atom's match went
   */
   void getPartialCharges(const ROMol &mol, std::vector<double> &res,

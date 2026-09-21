@@ -256,8 +256,7 @@ BOOST_PYTHON_MODULE(rdDASHTree) {
       .value("STD_WEIGHTED", DASH::ChargeNormalization::STD_WEIGHTED);
 
   python::class_<DASH::DASHParams>(
-      "DASHParams",
-      "Controls how far a subgraph match descends into the tree.",
+      "DASHParams", "Controls how far a subgraph match descends into the tree.",
       python::init<>(python::args("self")))
       .def_readwrite("maxDepth", &DASH::DASHParams::maxDepth,
                      "maximum number of tree levels to descend (default 16)")
@@ -270,9 +269,9 @@ BOOST_PYTHON_MODULE(rdDASHTree) {
                      "stop once a single step contributes less attention than "
                      "this (default 0.0)");
 
-  python::class_<DASH::ChargeOptions>(
-      "ChargeOptions", "Controls partial-charge assignment.",
-      python::init<>(python::args("self")))
+  python::class_<DASH::ChargeOptions>("ChargeOptions",
+                                      "Controls partial-charge assignment.",
+                                      python::init<>(python::args("self")))
       .def_readwrite("valueProperty", &DASH::ChargeOptions::valueProperty,
                      "property column holding the charges (default 'result')")
       .def_readwrite(
@@ -331,8 +330,8 @@ BOOST_PYTHON_MODULE(rdDASHTree) {
            python::args("self", "i"),
            "Returns the i-th child. Raises ValueError from GetNumChildren() "
            "on.")
-      .def("__len__", &DASH::DASHTreeNode::getNumChildren,
-           python::args("self"), "The number of children.")
+      .def("__len__", &DASH::DASHTreeNode::getNumChildren, python::args("self"),
+           "The number of children.")
       .def("__getitem__", nodeGetItem,
            python::with_custodian_and_ward_postcall<0, 1>(),
            python::args("self", "i"),
@@ -376,8 +375,7 @@ BOOST_PYTHON_MODULE(rdDASHTree) {
            "Returns how many bytes of the file were mapped.")
       .def("GetFileName", &DASH::DASHTree::filename,
            python::return_value_policy<python::copy_const_reference>(),
-           python::args("self"),
-           "Returns the path the tree was mapped from.")
+           python::args("self"), "Returns the path the tree was mapped from.")
       .def("GetPropertyNames", propertyNames, python::args("self"),
            "Returns the property columns that were resolved.")
       .def("HasProperty", &DASH::DASHTree::hasProperty,
@@ -418,22 +416,21 @@ BOOST_PYTHON_MODULE(rdDASHTree) {
 
       .def("GetRoot", &DASH::DASHTree::getRoot,
            python::with_custodian_and_ward_postcall<0, 1>(),
-           python::args("self", "branch"),
-           "Returns the root node of a branch.")
+           python::args("self", "branch"), "Returns the root node of a branch.")
       .def("GetNode", &DASH::DASHTree::getNode,
            python::with_custodian_and_ward_postcall<0, 1>(),
            python::args("self", "branch", "nodeId"),
            "Returns a node by branch and id, in the numbering GetAtomNodePath\n"
            "reports: GetNode(path[0], path[k]) is the k-th node of a match.\n")
 
-      .def("GetAtomProperty", &DASH::DASHTree::getAtomProperty,
-           (python::arg("self"), python::arg("mol"), python::arg("atomIdx"),
-            python::arg("property"),
-            python::arg("params") = DASH::DASHParams()),
-           "Returns the value of a property for one atom.\n\n"
-           "  The deepest node of the match that carries a value wins, so a\n"
-           "  sparsely populated column falls back to a more general\n"
-           "  substructure. NaN if no node on the path carries one.\n")
+      .def(
+          "GetAtomProperty", &DASH::DASHTree::getAtomProperty,
+          (python::arg("self"), python::arg("mol"), python::arg("atomIdx"),
+           python::arg("property"), python::arg("params") = DASH::DASHParams()),
+          "Returns the value of a property for one atom.\n\n"
+          "  The deepest node of the match that carries a value wins, so a\n"
+          "  sparsely populated column falls back to a more general\n"
+          "  substructure. NaN if no node on the path carries one.\n")
       .def("GetMolProperty", getMolProperty,
            (python::arg("self"), python::arg("mol"), python::arg("property"),
             python::arg("params") = DASH::DASHParams()),
@@ -475,10 +472,10 @@ BOOST_PYTHON_MODULE(rdDASHTree) {
            "a sequence. See GetPartialChargesBatch for the threading "
            "semantics.\n");
 
-  python::def("GetNumAtomFeatures",
-              +[]() { return DASH::numAtomFeatures; },
-              "Returns the number of atom-feature classes the DASH trees are "
-              "built from.");
+  python::def(
+      "GetNumAtomFeatures", +[]() { return DASH::numAtomFeatures; },
+      "Returns the number of atom-feature classes the DASH trees are "
+      "built from.");
   python::def("GetAtomFeature", atomFeature, python::args("index"),
               "Returns the atom-feature class with the given branch index as\n"
               "(atomicNum, degree, formalCharge, conjugated, numHs).\n");

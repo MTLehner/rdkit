@@ -16,6 +16,10 @@ if(RDK_BUILD_BOOST_PYTHON_WRAPPERS)
   add_subdirectory(Wrap)
 endif()
 
+if(RDK_BUILD_NANOBIND_WRAPPERS)
+  add_subdirectory(nbWrap)
+endif()
+
 else(RDK_USE_BOOST_IOSTREAMS)
 message("The DASHTree module memory-maps its data files via boost::iostreams, so not building.")
 endif(RDK_USE_BOOST_IOSTREAMS)

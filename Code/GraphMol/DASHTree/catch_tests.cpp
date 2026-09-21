@@ -153,3 +153,107 @@ TEST_CASE("DASH assignment", "[DASHTree]") {
   REQUIRE(atoms.size() == path.size() - 1);
   CHECK(atoms.front() == 0);
 }
+
+TEST_CASE("DASH integration on the synthetic tree", "[DASHTree]") {
+  // test_data/dash_test_tree.dash is written by rdkit/Chem/UnitTestDASHTree.py
+  // and checked in: 122 branches, four of them with children, knowing ethanol
+  // and nothing else. Its values are made up, so this checks the machinery --
+  // the descent, the property fallback, the stop flag, the normalisations and
+  // the node API -- rather than any chemistry.
+  const char *rdbase = std::getenv("RDBASE");
+  REQUIRE(rdbase != nullptr);
+  DASH::DASHTree tree(
+      std::string(rdbase) +
+          "/Code/GraphMol/DASHTree/test_data/dash_test_tree.dash",
+      {"result", "std"});
+  CHECK(tree.numBranches() == 122);
+  CHECK(tree.numNodes() == 136);
+  auto mol = molWithHs("CCO");  // C0 H3 H4 H5, C1 H6 H7, O2 H8
+  const std::uint32_t M = 34, P = 33, O = 83, H = 37;  // its four atom classes
+  REQUIRE(DASH::atomFeatureIndex(mol->getAtomWithIdx(2)) ==
+          static_cast<int>(O));
+
+  // every atom descends where the tree says, hydrogens through their neighbour
+  const std::vector<std::pair<unsigned int, std::vector<std::uint32_t>>> paths =
+      {{0, {M, 0, 1, 2, 3}}, {1, {P, 0, 1, 3}}, {2, {O, 0, 1}},
+       {3, {H, 0, 1, 4}},    {6, {H, 0, 2}},    {8, {H, 0, 3, 5}}};
+  std::vector<std::uint32_t> path;
+  for (const auto &[atom, expected] : paths) {
+    tree.getAtomNodePath(*mol, atom, path);
+    CHECK(path == expected);
+  }
+  std::vector<unsigned int> atoms;
+  tree.getMatchedSubstructure(*mol, 0, atoms);
+  CHECK(atoms == std::vector<unsigned int>{0, 1, 2, 8});
+
+  // the O descent stops at the flagged node; told to read the attentions
+  // instead, it carries on. Atom 0's deepest node has no value, so its walk
+  // falls back to the node above.
+  DASH::DASHParams deeper;
+  deeper.attentionThreshold = 100.0;
+  tree.getAtomNodePath(*mol, 2, path, deeper);
+  CHECK(path == std::vector<std::uint32_t>{O, 0, 1, 3});
+  CHECK(tree.getAtomProperty(*mol, 2, "result") == -0.65);
+  CHECK(tree.getAtomProperty(*mol, 2, "result", deeper) == -0.70);
+  CHECK(tree.getAtomProperty(*mol, 0, "result") == -0.45);
+
+  // the raw values, the deviations and the three normalisations
+  const std::vector<double> raw = {-0.45, -0.18, -0.65, 0.12, 0.12,
+                                   0.12,  0.08,  0.08,  0.31};
+  const std::vector<double> dev = {0.03, 0.02, 0.05, 0.02, 0.02,
+                                   0.02, 0.02, 0.02, 0.02};
+  std::vector<double> charges, rawOut, devOut;
+  std::vector<unsigned int> depths;
+  tree.getPartialCharges(*mol, charges, rawOut, devOut, depths);
+  CHECK(rawOut == raw);
+  CHECK(devOut == dev);
+  CHECK(depths == std::vector<unsigned int>{4, 3, 2, 3, 3, 3, 2, 2, 3});
+  double deficit = 0.0, devTotal = 0.0;
+  for (std::size_t i = 0; i < raw.size(); ++i) {
+    deficit -= raw[i];
+    devTotal += dev[i];
+  }
+  for (std::size_t i = 0; i < raw.size(); ++i) {
+    CHECK_THAT(charges[i], Catch::Matchers::WithinAbs(
+                               raw[i] + deficit * dev[i] / devTotal, 1e-12));
+  }
+  DASH::ChargeOptions symmetric;
+  symmetric.normalization = DASH::ChargeNormalization::SYMMETRIC;
+  tree.getPartialCharges(*mol, charges, symmetric);
+  for (std::size_t i = 0; i < raw.size(); ++i) {
+    CHECK_THAT(charges[i],
+               Catch::Matchers::WithinAbs(raw[i] + deficit / 9.0, 1e-12));
+  }
+
+  // the node API reads the same records the descent used
+  DASH::DASHTreeNode root = tree.getRoot(O);
+  REQUIRE(root.getNumChildren() == 2);
+  DASH::DASHTreeNode first = root.getChild(0);
+  CHECK(first.getAtomFeatureIndex() == static_cast<int>(H));
+  CHECK(first.getConAtom() == 0);
+  CHECK(first.getConType() == 1);
+  CHECK(first.getAttention() == 11.0f);
+  CHECK(first.stops());
+  CHECK(!root.getChild(1).stops());
+  CHECK(root.getChild(1).getValue("result") == -0.99);
+  CHECK(first.getChild(0).getId() == 3);
+  CHECK(std::isnan(tree.getNode(M, 3).getValue("result")));
+  CHECK_THROWS_AS(root.getChild(2), ValueErrorException);
+  CHECK_THROWS_AS(tree.getNode(122, 0), ValueErrorException);
+
+  // a threaded batch agrees with the single call, and a null entry is empty
+  std::vector<std::vector<double>> batch;
+  tree.getPartialChargesBatch({mol.get(), nullptr, mol.get()}, batch,
+                              DASH::ChargeOptions(), 0);
+  REQUIRE(batch.size() == 3);
+  CHECK(batch[1].empty());
+  tree.getPartialCharges(*mol, charges);
+  CHECK(batch[0] == charges);
+  CHECK(batch[2] == charges);
+
+  // an atom outside the DASH classes, and a class the tree has no data for
+  CHECK_THROWS_AS(tree.getPartialCharges(*molWithHs("C"), charges),
+                  ValueErrorException);
+  CHECK_THROWS_AS(tree.getPartialCharges(*molWithHs("c1ccccc1"), charges),
+                  ValueErrorException);
+}

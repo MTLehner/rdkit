@@ -37,14 +37,15 @@ struct RDKIT_DASHTREE_EXPORT AtomFeature {
   std::uint8_t atomicNum;
   std::uint8_t degree;
   std::int8_t formalCharge;
-  bool conjugated;  //!< is any bond of the atom conjugated
+  bool conjugated;     //!< is any bond of the atom conjugated
   std::uint8_t numHs;  //!< total Hs, explicit neighbours included
 };
 
 //! the atom-feature table; \c numAtomFeatures entries, indexed by branch index
 RDKIT_DASHTREE_EXPORT const AtomFeature *getAtomFeatureTable();
 
-//! \brief branch index of an atom-feature tuple, or -1 if it is not in the table
+//! \brief branch index of an atom-feature tuple, or -1 if it is not in the
+//! table
 /*!
   O(1): a 16 kB direct-lookup table over the 14 bits the five components fit
   into, built once on first use.
@@ -54,10 +55,12 @@ RDKIT_DASHTREE_EXPORT int atomFeatureIndex(unsigned int atomicNum,
                                            int formalCharge, bool conjugated,
                                            unsigned int numHs);
 
-//! branch index of an atom in a molecule, or -1 if its feature is not in the table
+//! branch index of an atom in a molecule, or -1 if its feature is not in the
+//! table
 RDKIT_DASHTREE_EXPORT int atomFeatureIndex(const Atom *atom);
 
-//! \brief the DASH bond descriptor: 4 if conjugated, else the bond order, -1 if unbonded
+//! \brief the DASH bond descriptor: 4 if conjugated, else the bond order, -1 if
+//! unbonded
 RDKIT_DASHTREE_EXPORT int dashBondType(const Bond *bond);
 
 // ---------------------------------------------------------------------------
@@ -86,9 +89,9 @@ RDKIT_DASHTREE_EXPORT int dashBondType(const Bond *bond);
 //  Setting bit 15 also survives the bit-or that grafts an attachment position
 //  onto a half-built key, so one sentinel serves both.
 
-const unsigned int keyAtomTypeBits = 8;   //!< bits 0-7:   atom feature class
-const unsigned int keyConAtomBits = 4;    //!< bits 8-11:  attachment position + 1
-const unsigned int keyConTypeBits = 3;    //!< bits 12-14: bond descriptor + 1
+const unsigned int keyAtomTypeBits = 8;  //!< bits 0-7:   atom feature class
+const unsigned int keyConAtomBits = 4;  //!< bits 8-11:  attachment position + 1
+const unsigned int keyConTypeBits = 3;  //!< bits 12-14: bond descriptor + 1
 const unsigned int keyConAtomShift = keyAtomTypeBits;
 const unsigned int keyConTypeShift = keyAtomTypeBits + keyConAtomBits;
 

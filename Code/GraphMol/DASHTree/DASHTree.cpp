@@ -106,7 +106,8 @@ DASHTree::Impl::Impl(const std::string &filename,
              : ". Please re-run tools/dash_convert.py to regenerate it."));
   }
   if (d_header.fileSize != size) {
-    throw ValueErrorException("'" + filename + "' is truncated: the header says " +
+    throw ValueErrorException("'" + filename +
+                              "' is truncated: the header says " +
                               std::to_string(d_header.fileSize) +
                               " bytes, the file is " + std::to_string(size));
   }
@@ -654,9 +655,7 @@ std::uint16_t DASHTreeNode::getKey() const {
   return dp_impl->d_node[d_abs].key;
 }
 
-int DASHTreeNode::getAtomFeatureIndex() const {
-  return keyAtomType(getKey());
-}
+int DASHTreeNode::getAtomFeatureIndex() const { return keyAtomType(getKey()); }
 
 const AtomFeature &DASHTreeNode::getFeature() const {
   const int index = getAtomFeatureIndex();
@@ -679,11 +678,10 @@ unsigned int DASHTreeNode::getNumChildren() const {
 DASHTreeNode DASHTreeNode::getChild(unsigned int i) const {
   const NodeRecord &record = dp_impl->d_node[d_abs];
   if (i >= record.numChildren) {
-    throw ValueErrorException(
-        "node " + std::to_string(getId()) + " of branch " +
-        std::to_string(getBranch()) + " has " +
-        std::to_string(record.numChildren) + " children, no child " +
-        std::to_string(i));
+    throw ValueErrorException("node " + std::to_string(getId()) +
+                              " of branch " + std::to_string(getBranch()) +
+                              " has " + std::to_string(record.numChildren) +
+                              " children, no child " + std::to_string(i));
   }
   return DASHTreeNode(*dp_impl, record.firstChild + i);
 }

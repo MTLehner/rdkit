@@ -22,8 +22,9 @@ namespace DASH {
 namespace {
 
 // The atom-feature table of the published DASH trees, in branch-index order.
-// Generated from serenityff.charge.tree.atom_features.AtomFeatures.feature_list;
-// the order is part of the file format and must not be changed.
+// Generated from
+// serenityff.charge.tree.atom_features.AtomFeatures.feature_list; the order is
+// part of the file format and must not be changed.
 // clang-format off
 const AtomFeature featureTable[numAtomFeatures] = {
     {  5, 1,  0, false, 2},  // 0
@@ -154,11 +155,12 @@ const AtomFeature featureTable[numAtomFeatures] = {
 // Bit budget of the direct-lookup table. The table covers every tuple that can
 // be encoded; anything outside is rejected before the lookup, so an exotic atom
 // costs one comparison rather than a search.
-const unsigned int lookupAtomicNumBits = 6;  // Z <= 63 (the table tops out at I, 53)
-const unsigned int lookupDegreeBits = 3;     // degree <= 7 (table: 1..5)
-const unsigned int lookupChargeBits = 2;     // charge + 1 in 0..3 (table: -1..1)
+const unsigned int lookupAtomicNumBits =
+    6;  // Z <= 63 (the table tops out at I, 53)
+const unsigned int lookupDegreeBits = 3;  // degree <= 7 (table: 1..5)
+const unsigned int lookupChargeBits = 2;  // charge + 1 in 0..3 (table: -1..1)
 const unsigned int lookupConjBits = 1;
-const unsigned int lookupNumHsBits = 2;      // <= 3
+const unsigned int lookupNumHsBits = 2;  // <= 3
 const unsigned int lookupBits = lookupAtomicNumBits + lookupDegreeBits +
                                 lookupChargeBits + lookupConjBits +
                                 lookupNumHsBits;  // 14 -> 16 kB

@@ -40,7 +40,8 @@ const std::size_t dashHeaderSize = 128;
 const std::size_t dashPropertyEntrySize = 48;
 const std::size_t dashPropertyNameLen = 32;
 
-//! written into the header so a byte-swapped read is caught rather than acted on
+//! written into the header so a byte-swapped read is caught rather than acted
+//! on
 const std::uint32_t dashEndianId = 0xDEADBEEF;
 
 //! \brief storage type of a property column
@@ -68,10 +69,10 @@ const std::uint8_t nodeFlagStop = 0x01;
   array a general graph would need.
 */
 struct NodeRecord {
-  std::uint16_t key;           //!< packed match key, see AtomFeatures.h
-  std::uint8_t numChildren;    //!< at most 47 in the published trees
-  std::uint8_t flags;          //!< see nodeFlagStop
-  std::uint32_t firstChild;    //!< node id of the first child
+  std::uint16_t key;         //!< packed match key, see AtomFeatures.h
+  std::uint8_t numChildren;  //!< at most 47 in the published trees
+  std::uint8_t flags;        //!< see nodeFlagStop
+  std::uint32_t firstChild;  //!< node id of the first child
 };
 
 static_assert(sizeof(NodeRecord) == 8, "NodeRecord must stay 8 bytes");
@@ -183,10 +184,10 @@ class DASHTree::Impl {
   boost::iostreams::mapped_file_source d_map;
   detail::DASHHeader d_header;
 
-  const std::uint32_t *d_branchRoot = nullptr;      //!< numBranches
-  const detail::NodeRecord *d_node = nullptr;       //!< numNodes
-  const float *d_nodeAttn = nullptr;                //!< numNodes
-  const std::uint32_t *d_nodeSourceId = nullptr;    //!< numNodes, may be null
+  const std::uint32_t *d_branchRoot = nullptr;    //!< numBranches
+  const detail::NodeRecord *d_node = nullptr;     //!< numNodes
+  const float *d_nodeAttn = nullptr;              //!< numNodes
+  const std::uint32_t *d_nodeSourceId = nullptr;  //!< numNodes, may be null
 
   std::vector<detail::PropertyColumn> d_properties;
 };
@@ -256,9 +257,10 @@ class MolMatcher {
   std::vector<std::uint32_t> d_subgraph;  //!< matched atoms, insertion order
   std::vector<std::uint16_t> d_candKey;   //!< noMatchKey once consumed
   std::vector<std::uint32_t> d_candAtom;
-  std::vector<std::uint32_t> d_seen;      //!< generation stamps, O(1) to clear
+  std::vector<std::uint32_t> d_seen;  //!< generation stamps, O(1) to clear
   std::uint32_t d_generation = 0;
-  //! bloom filter over the live candidate keys; rejects most children in one test
+  //! bloom filter over the live candidate keys; rejects most children in one
+  //! test
   std::uint64_t d_candFilter = 0;
 };
 
