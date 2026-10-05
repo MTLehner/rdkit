@@ -68,24 +68,27 @@ struct RDKIT_DASHTREE_EXPORT DASHParams {
   double attentionIncrementThreshold = 0.0;
 };
 
-//! \brief how partial charges are made to sum to the molecule's formal charge
-enum class ChargeNormalization {
+//! \brief how per-atom values are made to sum to a molecule-wide target
+enum class Normalization {
   NONE,         //!< leave the raw tree values alone
   SYMMETRIC,    //!< spread the deficit equally over all atoms
   STD_WEIGHTED  //!< spread it proportionally to each atom's stored deviation
 };
+using ChargeNormalization = Normalization;
 
-//! \brief controls partial-charge assignment
-struct RDKIT_DASHTREE_EXPORT ChargeOptions {
-  //! property column holding the charges
+//! \brief controls a normalised assignment; partial charges are the usual case
+struct RDKIT_DASHTREE_EXPORT NormalizationOptions {
+  //! property column holding the values
   std::string valueProperty = "result";
-  //! property column holding their standard deviations
+  //! property column holding their standard deviations; needed by
+  //! STD_WEIGHTED, used by the others when the file has it
   std::string stdProperty = "std";
-  ChargeNormalization normalization = ChargeNormalization::STD_WEIGHTED;
-  //! substituted for a stored deviation that is zero or negative
+  Normalization normalization = Normalization::STD_WEIGHTED;
+  //! substituted for a stored deviation that is zero, negative or absent
   double defaultStdValue = 0.1;
   DASHParams params;
 };
+using ChargeOptions = NormalizationOptions;
 
 //! \brief a memory-mapped DASH tree
 /*!
@@ -195,22 +198,45 @@ class RDKIT_DASHTREE_EXPORT DASHTree {
                       std::vector<double> &res,
                       const DASHParams &params = DASHParams()) const;
 
-  //! \brief partial charges for every atom of \p mol
+  //! \brief values of \p options.valueProperty for every atom of \p mol,
+  //! adjusted to sum to \p target
   /*!
-    \param res overwritten with one charge per atom, normalised as
-           \c options.normalization asks
-  */
-  void getPartialCharges(const ROMol &mol, std::vector<double> &res,
-                         const ChargeOptions &options = ChargeOptions()) const;
+    Partial charges are the published case: the target is the molecule's formal
+    charge, which getPartialCharges() supplies. Any per-atom property with a
+    molecule-wide total works the same way. \p options names the value column,
+    the deviation column STD_WEIGHTED weights the adjustment by, and how to
+    adjust; with NONE the target is ignored.
 
-  //! \brief partial charges, also reporting the intermediates
+    \throws ValueErrorException if the value column was not resolved, if an
+            atom's path carries no value, or if STD_WEIGHTED is asked for
+            without a positive \c defaultStdValue
+  */
+  void getNormalizedMolProperty(
+      const ROMol &mol, double target, std::vector<double> &res,
+      const NormalizationOptions &options = NormalizationOptions()) const;
+
+  //! \brief getNormalizedMolProperty(), also reporting the intermediates
   /*!
-    \param res         normalised charges
+    \param res         the adjusted values
     \param rawValues   the values straight out of the tree, before normalisation
     \param stds        the deviations used, after \c defaultStdValue
     substitution
     \param matchDepths how deep each atom's match went
   */
+  void getNormalizedMolProperty(
+      const ROMol &mol, double target, std::vector<double> &res,
+      std::vector<double> &rawValues, std::vector<double> &stds,
+      std::vector<unsigned int> &matchDepths,
+      const NormalizationOptions &options = NormalizationOptions()) const;
+
+  //! \brief partial charges for every atom of \p mol
+  /*!
+    getNormalizedMolProperty() with the molecule's formal charge as the target.
+  */
+  void getPartialCharges(const ROMol &mol, std::vector<double> &res,
+                         const ChargeOptions &options = ChargeOptions()) const;
+
+  //! partial charges, also reporting the intermediates
   void getPartialCharges(const ROMol &mol, std::vector<double> &res,
                          std::vector<double> &rawValues,
                          std::vector<double> &stds,
@@ -236,6 +262,16 @@ class RDKIT_DASHTREE_EXPORT DASHTree {
                            std::vector<std::vector<double>> &res,
                            const DASHParams &params = DASHParams(),
                            int numThreads = 1) const;
+
+  //! \brief getNormalizedMolProperty() for every molecule, one target each
+  /*!
+    \throws ValueErrorException if \p targets and \p mols differ in length
+  */
+  void getNormalizedMolPropertyBatch(
+      const std::vector<const ROMol *> &mols,
+      const std::vector<double> &targets, std::vector<std::vector<double>> &res,
+      const NormalizationOptions &options = NormalizationOptions(),
+      int numThreads = 1) const;
 
   //! partial charges for every atom of every molecule
   void getPartialChargesBatch(const std::vector<const ROMol *> &mols,

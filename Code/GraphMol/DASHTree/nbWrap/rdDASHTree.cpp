@@ -81,10 +81,11 @@ const char *moduleDoc =
 NB_MODULE(rdDASHTree, m) {
   m.doc() = moduleDoc;
 
-  nb::enum_<DASH::ChargeNormalization>(m, "ChargeNormalization")
-      .value("NONE", DASH::ChargeNormalization::NONE)
-      .value("SYMMETRIC", DASH::ChargeNormalization::SYMMETRIC)
-      .value("STD_WEIGHTED", DASH::ChargeNormalization::STD_WEIGHTED);
+  nb::enum_<DASH::Normalization>(m, "Normalization")
+      .value("NONE", DASH::Normalization::NONE)
+      .value("SYMMETRIC", DASH::Normalization::SYMMETRIC)
+      .value("STD_WEIGHTED", DASH::Normalization::STD_WEIGHTED);
+  m.attr("ChargeNormalization") = m.attr("Normalization");
 
   nb::class_<DASH::DASHParams>(
       m, "DASHParams",
@@ -100,21 +101,25 @@ NB_MODULE(rdDASHTree, m) {
               "stop once a single step contributes less attention than this "
               "(default 0.0)");
 
-  nb::class_<DASH::ChargeOptions>(m, "ChargeOptions",
-                                  "Controls partial-charge assignment.")
+  nb::class_<DASH::NormalizationOptions>(
+      m, "NormalizationOptions",
+      "Controls a normalised assignment, partial charges being the usual "
+      "case.")
       .def(nb::init<>())
-      .def_rw("valueProperty", &DASH::ChargeOptions::valueProperty,
-              "property column holding the charges (default 'result')")
-      .def_rw("stdProperty", &DASH::ChargeOptions::stdProperty,
+      .def_rw("valueProperty", &DASH::NormalizationOptions::valueProperty,
+              "property column holding the values (default 'result')")
+      .def_rw("stdProperty", &DASH::NormalizationOptions::stdProperty,
               "property column holding their standard deviations (default "
-              "'std')")
-      .def_rw("normalization", &DASH::ChargeOptions::normalization,
-              "a ChargeNormalization (default STD_WEIGHTED)")
-      .def_rw("defaultStdValue", &DASH::ChargeOptions::defaultStdValue,
-              "substituted for a stored deviation that is not positive "
-              "(default 0.1)")
-      .def_rw("params", &DASH::ChargeOptions::params,
+              "'std'); needed by STD_WEIGHTED, used by the others when the "
+              "file has it")
+      .def_rw("normalization", &DASH::NormalizationOptions::normalization,
+              "a Normalization (default STD_WEIGHTED)")
+      .def_rw("defaultStdValue", &DASH::NormalizationOptions::defaultStdValue,
+              "substituted for a stored deviation that is not positive or "
+              "absent (default 0.1)")
+      .def_rw("params", &DASH::NormalizationOptions::params,
               "the DASHParams controlling the match");
+  m.attr("ChargeOptions") = m.attr("NormalizationOptions");
 
   nb::class_<DASH::DASHTreeNode>(
       m, "DASHTreeNode",
@@ -290,6 +295,61 @@ NB_MODULE(rdDASHTree, m) {
           },
           "mol"_a, "property"_a, "params"_a = DASH::DASHParams(),
           "Returns the value of a property for every atom of a molecule.\n")
+      .def(
+          "GetNormalizedMolProperty",
+          [](const DASH::DASHTree &self, const ROMol &mol, double target,
+             const DASH::NormalizationOptions &options) {
+            std::vector<double> values;
+            self.getNormalizedMolProperty(mol, target, values, options);
+            return values;
+          },
+          "mol"_a, "target"_a, "options"_a = DASH::NormalizationOptions(),
+          "Returns the value of options.valueProperty for every atom, "
+          "adjusted\n"
+          "so the values sum to target. GetPartialCharges is this with the\n"
+          "molecule's formal charge as the target.\n")
+      .def(
+          "GetNormalizedMolPropertyDetails",
+          [](const DASH::DASHTree &self, const ROMol &mol, double target,
+             const DASH::NormalizationOptions &options) {
+            std::vector<double> values, rawValues, stds;
+            std::vector<unsigned int> matchDepths;
+            self.getNormalizedMolProperty(mol, target, values, rawValues, stds,
+                                          matchDepths, options);
+            nb::dict res;
+            res["values"] = nb::cast(values);
+            res["raw"] = nb::cast(rawValues);
+            res["std"] = nb::cast(stds);
+            res["match_depth"] = nb::cast(matchDepths);
+            return res;
+          },
+          "mol"_a, "target"_a, "options"_a = DASH::NormalizationOptions(),
+          "Like GetNormalizedMolProperty, but returns a dict also holding "
+          "the\n"
+          "raw tree values ('raw'), the deviations used ('std') and how deep "
+          "each\n"
+          "atom's match went ('match_depth').\n")
+      .def(
+          "GetNormalizedMolPropertyBatch",
+          [](const DASH::DASHTree &self, const nb::object &mols,
+             const std::vector<double> &targets,
+             const DASH::NormalizationOptions &options, int numThreads) {
+            const std::vector<const ROMol *> molPtrs = molsFromPython(mols);
+            std::vector<std::vector<double>> values;
+            {
+              nb::gil_scoped_release release;
+              ControlCHandler::reset();
+              self.getNormalizedMolPropertyBatch(molPtrs, targets, values,
+                                                 options, numThreads);
+            }
+            raiseIfInterrupted();
+            return values;
+          },
+          "mols"_a, "targets"_a, "options"_a = DASH::NormalizationOptions(),
+          "numThreads"_a = 1,
+          "GetNormalizedMolProperty for a sequence of molecules, one target "
+          "each.\n"
+          "See GetPartialChargesBatch for the threading semantics.\n")
       .def(
           "GetPartialCharges",
           [](const DASH::DASHTree &self, const ROMol &mol,

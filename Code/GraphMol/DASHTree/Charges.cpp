@@ -59,32 +59,27 @@ double compensatedSum(const std::vector<double> &values) {
   return sum + compensation;
 }
 
-//! \brief spreads the difference to the molecule's formal charge over the atoms
+//! \brief spreads the difference to a molecule-wide target over the atoms
 /*!
-  The tree stores each atom's charge independently, so the raw values do not
-  quite add up to the molecule's charge. SYMMETRIC hands every atom the same
-  share of the difference; STD_WEIGHTED gives more of it to the atoms the tree
-  is least certain about, which is the published default.
+  The tree stores each atom's value independently, so the raw values do not
+  quite add up to what the molecule as a whole should carry -- its formal
+  charge, for partial charges. SYMMETRIC hands every atom the same share of the
+  difference; STD_WEIGHTED gives more of it to the atoms the tree is least
+  certain about, which is the published default for charges.
 */
-void normalizeCharges(const ROMol &mol, const std::vector<double> &rawValues,
-                      const std::vector<double> &stds,
-                      ChargeNormalization normalization,
-                      std::vector<double> &res) {
+void normalizeValues(double target, const std::vector<double> &rawValues,
+                     const std::vector<double> &stds,
+                     Normalization normalization, std::vector<double> &res) {
   const std::size_t nAtoms = rawValues.size();
-  if (normalization == ChargeNormalization::NONE || nAtoms == 0) {
+  if (normalization == Normalization::NONE || nAtoms == 0) {
     res = rawValues;
     return;
   }
   res.resize(nAtoms);
 
-  const double treeTotal = compensatedSum(rawValues);
-  int molTotal = 0;
-  for (const auto atom : mol.atoms()) {
-    molTotal += atom->getFormalCharge();
-  }
-  const double deficit = molTotal - treeTotal;
+  const double deficit = target - compensatedSum(rawValues);
 
-  if (normalization == ChargeNormalization::SYMMETRIC) {
+  if (normalization == Normalization::SYMMETRIC) {
     const double share = deficit / static_cast<double>(nAtoms);
     for (std::size_t i = 0; i < nAtoms; ++i) {
       res[i] = rawValues[i] + share;
@@ -98,13 +93,46 @@ void normalizeCharges(const ROMol &mol, const std::vector<double> &rawValues,
   }
 }
 
-//! the per-molecule charge assignment, shared by every entry point
-void assignCharges(MolMatcher &matcher, const ROMol &mol,
-                   const PropertyColumn &valueColumn,
-                   const PropertyColumn &stdColumn,
-                   const ChargeOptions &options, std::vector<double> &res,
-                   std::vector<double> &rawValues, std::vector<double> &stds,
-                   std::vector<unsigned int> &matchDepths) {
+double formalCharge(const ROMol &mol) {
+  int total = 0;
+  for (const auto atom : mol.atoms()) {
+    total += atom->getFormalCharge();
+  }
+  return total;
+}
+
+void checkOptions(const NormalizationOptions &options) {
+  if (options.normalization == Normalization::STD_WEIGHTED &&
+      !(options.defaultStdValue > 0.0)) {
+    throw ValueErrorException(
+        "defaultStdValue must be positive: it stands in for a missing "
+        "deviation, and STD_WEIGHTED divides by the sum of the deviations");
+  }
+}
+
+//! \brief the deviation column \p options asks for
+/*!
+  STD_WEIGHTED cannot do without it; the other normalisations report it when
+  the file has it and fall back to \c defaultStdValue when it does not, so a
+  column without a deviation column of its own can still be normalised.
+*/
+const PropertyColumn *stdColumnFor(const DASHTree::Impl &impl,
+                                   const NormalizationOptions &options) {
+  if (options.normalization == Normalization::STD_WEIGHTED ||
+      impl.propertyIndex(options.stdProperty) >= 0) {
+    return &impl.property(options.stdProperty);
+  }
+  return nullptr;
+}
+
+//! the per-molecule normalised assignment, shared by every entry point
+void assignNormalized(MolMatcher &matcher, const ROMol &mol, double target,
+                      const PropertyColumn &valueColumn,
+                      const PropertyColumn *stdColumn,
+                      const NormalizationOptions &options,
+                      std::vector<double> &res, std::vector<double> &rawValues,
+                      std::vector<double> &stds,
+                      std::vector<unsigned int> &matchDepths) {
   const unsigned int nAtoms = mol.getNumAtoms();
   matcher.setMolecule(mol);
   rawValues.resize(nAtoms);
@@ -127,13 +155,14 @@ void assignCharges(MolMatcher &matcher, const ROMol &mol,
           std::to_string(atom->getFormalCharge()) +
           "): its atom type is in the tree but carries no data");
     }
-    const double deviation = matcher.pathValue(stdColumn);
     // a zero deviation would give the atom no share of the normalisation, and
     // a missing one (NaN) would poison the whole molecule
+    const double deviation =
+        stdColumn ? matcher.pathValue(*stdColumn) : options.defaultStdValue;
     stds[i] = (deviation > 0.0) ? deviation : options.defaultStdValue;
     matchDepths[i] = static_cast<unsigned int>(matcher.path().size());
   }
-  normalizeCharges(mol, rawValues, stds, options.normalization, res);
+  normalizeValues(target, rawValues, stds, options.normalization, res);
 }
 
 // ---------------------------------------------------------------------------
@@ -219,23 +248,40 @@ std::vector<std::unique_ptr<MolMatcher>> makeMatchers(
 
 }  // namespace
 
+void DASHTree::getNormalizedMolProperty(
+    const ROMol &mol, double target, std::vector<double> &res,
+    std::vector<double> &rawValues, std::vector<double> &stds,
+    std::vector<unsigned int> &matchDepths,
+    const NormalizationOptions &options) const {
+  checkOptions(options);
+  const PropertyColumn &valueColumn = d_impl->property(options.valueProperty);
+  const PropertyColumn *stdColumn = stdColumnFor(*d_impl, options);
+  MolMatcher matcher(*d_impl);
+  assignNormalized(matcher, mol, target, valueColumn, stdColumn, options, res,
+                   rawValues, stds, matchDepths);
+}
+
+void DASHTree::getNormalizedMolProperty(
+    const ROMol &mol, double target, std::vector<double> &res,
+    const NormalizationOptions &options) const {
+  std::vector<double> rawValues, stds;
+  std::vector<unsigned int> matchDepths;
+  getNormalizedMolProperty(mol, target, res, rawValues, stds, matchDepths,
+                           options);
+}
+
 void DASHTree::getPartialCharges(const ROMol &mol, std::vector<double> &res,
                                  std::vector<double> &rawValues,
                                  std::vector<double> &stds,
                                  std::vector<unsigned int> &matchDepths,
                                  const ChargeOptions &options) const {
-  const PropertyColumn &valueColumn = d_impl->property(options.valueProperty);
-  const PropertyColumn &stdColumn = d_impl->property(options.stdProperty);
-  MolMatcher matcher(*d_impl);
-  assignCharges(matcher, mol, valueColumn, stdColumn, options, res, rawValues,
-                stds, matchDepths);
+  getNormalizedMolProperty(mol, formalCharge(mol), res, rawValues, stds,
+                           matchDepths, options);
 }
 
 void DASHTree::getPartialCharges(const ROMol &mol, std::vector<double> &res,
                                  const ChargeOptions &options) const {
-  std::vector<double> rawValues, stds;
-  std::vector<unsigned int> matchDepths;
-  getPartialCharges(mol, res, rawValues, stds, matchDepths, options);
+  getNormalizedMolProperty(mol, formalCharge(mol), res, options);
 }
 
 void DASHTree::getMolPropertyBatch(const std::vector<const ROMol *> &mols,
@@ -264,12 +310,18 @@ void DASHTree::getMolPropertyBatch(const std::vector<const ROMol *> &mols,
   });
 }
 
-void DASHTree::getPartialChargesBatch(const std::vector<const ROMol *> &mols,
-                                      std::vector<std::vector<double>> &res,
-                                      const ChargeOptions &options,
-                                      int numThreads) const {
+void DASHTree::getNormalizedMolPropertyBatch(
+    const std::vector<const ROMol *> &mols, const std::vector<double> &targets,
+    std::vector<std::vector<double>> &res, const NormalizationOptions &options,
+    int numThreads) const {
+  if (targets.size() != mols.size()) {
+    throw ValueErrorException(
+        "one target per molecule: " + std::to_string(targets.size()) +
+        " targets for " + std::to_string(mols.size()) + " molecules");
+  }
+  checkOptions(options);
   const PropertyColumn &valueColumn = d_impl->property(options.valueProperty);
-  const PropertyColumn &stdColumn = d_impl->property(options.stdProperty);
+  const PropertyColumn *stdColumn = stdColumnFor(*d_impl, options);
   res.clear();
   res.resize(mols.size());
 
@@ -281,9 +333,23 @@ void DASHTree::getPartialChargesBatch(const std::vector<const ROMol *> &mols,
     if (!mols[i]) {
       return;
     }
-    assignCharges(*matchers[t], *mols[i], valueColumn, stdColumn, options,
-                  res[i], rawScratch[t], stdScratch[t], depthScratch[t]);
+    assignNormalized(*matchers[t], *mols[i], targets[i], valueColumn, stdColumn,
+                     options, res[i], rawScratch[t], stdScratch[t],
+                     depthScratch[t]);
   });
+}
+
+void DASHTree::getPartialChargesBatch(const std::vector<const ROMol *> &mols,
+                                      std::vector<std::vector<double>> &res,
+                                      const ChargeOptions &options,
+                                      int numThreads) const {
+  std::vector<double> targets(mols.size(), 0.0);
+  for (std::size_t i = 0; i < mols.size(); ++i) {
+    if (mols[i]) {
+      targets[i] = formalCharge(*mols[i]);
+    }
+  }
+  getNormalizedMolPropertyBatch(mols, targets, res, options, numThreads);
 }
 
 }  // namespace DASH

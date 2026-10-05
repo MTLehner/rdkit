@@ -235,6 +235,24 @@ TEST_CASE("DASH integration on the synthetic tree", "[DASHTree]") {
                Catch::Matchers::WithinAbs(raw[i] + deficit / 9.0, 1e-12));
   }
 
+  // charges are the normalised assignment with the formal charge as target;
+  // any other target works the same way, and a non-positive default
+  // deviation is refused rather than dividing by it
+  std::vector<double> values;
+  tree.getPartialCharges(*mol, charges);
+  tree.getNormalizedMolProperty(*mol, 0.0, values);
+  CHECK(values == charges);
+  tree.getNormalizedMolProperty(*mol, 1.0, values);
+  double total = 0.0;
+  for (const auto value : values) {
+    total += value;
+  }
+  CHECK_THAT(total, Catch::Matchers::WithinAbs(1.0, 1e-12));
+  DASH::NormalizationOptions noStd;
+  noStd.defaultStdValue = 0.0;
+  CHECK_THROWS_AS(tree.getNormalizedMolProperty(*mol, 0.0, values, noStd),
+                  ValueErrorException);
+
   // the node API reads the same records the descent used
   DASH::DASHTreeNode root = tree.getRoot(O);
   REQUIRE(root.getNumChildren() == 2);

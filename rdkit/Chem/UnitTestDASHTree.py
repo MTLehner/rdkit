@@ -179,6 +179,39 @@ class TestSyntheticTree(unittest.TestCase):
     self.assertEqual(batch[0], self.tree.GetPartialCharges(self.mol))
     self.assertEqual(batch[0], batch[2])
 
+  def testNormalizedMolProperty(self):
+    # charges are the normalised assignment with the formal charge as target
+    charges = self.tree.GetPartialCharges(self.mol)
+    self.assertEqual(self.tree.GetNormalizedMolProperty(self.mol, 0.0), charges)
+    self.assertAlmostEqual(sum(self.tree.GetNormalizedMolProperty(self.mol, 1.0)), 1.0, places=12)
+    details = self.tree.GetNormalizedMolPropertyDetails(self.mol, 1.0)
+    self.assertEqual(sorted(details), ["match_depth", "raw", "std", "values"])
+    self.assertEqual(details["raw"], self.tree.GetPartialChargesDetails(self.mol)["raw"])
+    batch = self.tree.GetNormalizedMolPropertyBatch([self.mol, None, self.mol], [0.0, 0.0, 1.0])
+    self.assertEqual(batch[0], charges)
+    self.assertEqual(batch[1], [])
+    self.assertAlmostEqual(sum(batch[2]), 1.0, places=12)
+    with self.assertRaises(ValueError):  # one target per molecule
+      self.tree.GetNormalizedMolPropertyBatch([self.mol], [0.0, 1.0])
+    # the options class and the normalisation enum keep their charge names too
+    self.assertIs(rdDASHTree.ChargeOptions, rdDASHTree.NormalizationOptions)
+    self.assertIs(rdDASHTree.ChargeNormalization, rdDASHTree.Normalization)
+    options = rdDASHTree.NormalizationOptions()
+    options.normalization = rdDASHTree.Normalization.NONE
+    self.assertEqual(self.tree.GetNormalizedMolProperty(self.mol, 1.0, options), details["raw"])
+    # a column without a deviation column still normalises, except by weight
+    options.stdProperty = "no_such_column"
+    options.normalization = rdDASHTree.Normalization.SYMMETRIC
+    self.assertAlmostEqual(sum(self.tree.GetNormalizedMolProperty(self.mol, 1.0, options)), 1.0,
+                           places=12)
+    options.normalization = rdDASHTree.Normalization.STD_WEIGHTED
+    with self.assertRaises(ValueError):
+      self.tree.GetNormalizedMolProperty(self.mol, 1.0, options)
+    options.stdProperty = "std"
+    options.defaultStdValue = 0.0
+    with self.assertRaises(ValueError):  # would divide by the deviation total
+      self.tree.GetNormalizedMolProperty(self.mol, 1.0, options)
+
   def testRefusals(self):
     with self.assertRaises(ValueError):  # methane's carbon is not a DASH class
       self.tree.GetPartialCharges(Chem.AddHs(Chem.MolFromSmiles("C")))

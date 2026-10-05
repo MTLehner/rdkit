@@ -104,6 +104,11 @@ smarts = GetAtomMatchSmarts(tree, mol, 0)                # the substructure it m
 
 props = rdDASHTree.DASHTree("props.dash", ["AM1BCC", "AM1BCC_std", "DFTD4:C6"])
 c6 = props.GetMolProperty(mol, "DFTD4:C6")
+
+# any per-atom property with a molecule-wide total normalises like the charges do
+options = rdDASHTree.NormalizationOptions()
+options.valueProperty, options.stdProperty = "AM1BCC", "AM1BCC_std"
+am1bcc = props.GetNormalizedMolProperty(mol, Chem.GetFormalCharge(mol), options)
 batch = tree.GetPartialChargesBatch(mols, numThreads=0)  # 0 = every core
 ```
 

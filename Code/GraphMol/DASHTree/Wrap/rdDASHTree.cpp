@@ -104,22 +104,48 @@ python::list getPartialCharges(const DASH::DASHTree &self, const ROMol &mol,
   return doublesToPython(charges);
 }
 
+python::list getNormalizedMolProperty(
+    const DASH::DASHTree &self, const ROMol &mol, double target,
+    const DASH::NormalizationOptions &options) {
+  std::vector<double> values;
+  self.getNormalizedMolProperty(mol, target, values, options);
+  return doublesToPython(values);
+}
+
+//! the intermediates of a normalised assignment, under \p label for the result
+python::dict detailsDict(const char *label, const std::vector<double> &values,
+                         const std::vector<double> &rawValues,
+                         const std::vector<double> &stds,
+                         const std::vector<unsigned int> &matchDepths) {
+  python::list depths;
+  for (const auto depth : matchDepths) {
+    depths.append(depth);
+  }
+  python::dict res;
+  res[label] = doublesToPython(values);
+  res["raw"] = doublesToPython(rawValues);
+  res["std"] = doublesToPython(stds);
+  res["match_depth"] = depths;
+  return res;
+}
+
 python::dict getPartialChargesDetails(const DASH::DASHTree &self,
                                       const ROMol &mol,
                                       const DASH::ChargeOptions &options) {
   std::vector<double> charges, rawValues, stds;
   std::vector<unsigned int> matchDepths;
   self.getPartialCharges(mol, charges, rawValues, stds, matchDepths, options);
-  python::list depths;
-  for (const auto depth : matchDepths) {
-    depths.append(depth);
-  }
-  python::dict res;
-  res["charges"] = doublesToPython(charges);
-  res["raw"] = doublesToPython(rawValues);
-  res["std"] = doublesToPython(stds);
-  res["match_depth"] = depths;
-  return res;
+  return detailsDict("charges", charges, rawValues, stds, matchDepths);
+}
+
+python::dict getNormalizedMolPropertyDetails(
+    const DASH::DASHTree &self, const ROMol &mol, double target,
+    const DASH::NormalizationOptions &options) {
+  std::vector<double> values, rawValues, stds;
+  std::vector<unsigned int> matchDepths;
+  self.getNormalizedMolProperty(mol, target, values, rawValues, stds,
+                                matchDepths, options);
+  return detailsDict("values", values, rawValues, stds, matchDepths);
 }
 
 //! borrows the molecules a python sequence holds, without copying them
@@ -166,6 +192,31 @@ python::list getPartialChargesBatch(const DASH::DASHTree &self,
     python::throw_error_already_set();
   }
   return nestedToPython(charges);
+}
+
+python::list getNormalizedMolPropertyBatch(
+    const DASH::DASHTree &self, const python::object &mols,
+    const python::object &targets, const DASH::NormalizationOptions &options,
+    int numThreads) {
+  const std::vector<const ROMol *> molPtrs = molsFromPython(mols);
+  std::vector<double> targetValues;
+  for (python::ssize_t i = 0; i < python::len(targets); ++i) {
+    targetValues.push_back(python::extract<double>(targets[i]));
+  }
+  std::vector<std::vector<double>> values;
+  bool interrupted = false;
+  {
+    NOGIL gil;
+    ControlCHandler::reset();
+    self.getNormalizedMolPropertyBatch(molPtrs, targetValues, values, options,
+                                       numThreads);
+    interrupted = ControlCHandler::getGotSignal();
+  }
+  if (interrupted) {
+    PyErr_SetString(PyExc_KeyboardInterrupt, "DASH tree batch cancelled");
+    python::throw_error_already_set();
+  }
+  return nestedToPython(values);
 }
 
 python::list getMolPropertyBatch(const DASH::DASHTree &self,
@@ -247,10 +298,12 @@ BOOST_PYTHON_MODULE(rdDASHTree) {
 
   RegisterVectorConverter<std::string>("_vectstring_dash");
 
-  python::enum_<DASH::ChargeNormalization>("ChargeNormalization")
-      .value("NONE", DASH::ChargeNormalization::NONE)
-      .value("SYMMETRIC", DASH::ChargeNormalization::SYMMETRIC)
-      .value("STD_WEIGHTED", DASH::ChargeNormalization::STD_WEIGHTED);
+  python::enum_<DASH::Normalization>("Normalization")
+      .value("NONE", DASH::Normalization::NONE)
+      .value("SYMMETRIC", DASH::Normalization::SYMMETRIC)
+      .value("STD_WEIGHTED", DASH::Normalization::STD_WEIGHTED);
+  python::scope().attr("ChargeNormalization") =
+      python::scope().attr("Normalization");
 
   python::class_<DASH::DASHParams>(
       "DASHParams", "Controls how far a subgraph match descends into the tree.",
@@ -266,21 +319,29 @@ BOOST_PYTHON_MODULE(rdDASHTree) {
                      "stop once a single step contributes less attention than "
                      "this (default 0.0)");
 
-  python::class_<DASH::ChargeOptions>("ChargeOptions",
-                                      "Controls partial-charge assignment.",
-                                      python::init<>(python::args("self")))
-      .def_readwrite("valueProperty", &DASH::ChargeOptions::valueProperty,
-                     "property column holding the charges (default 'result')")
-      .def_readwrite(
-          "stdProperty", &DASH::ChargeOptions::stdProperty,
-          "property column holding their standard deviations (default 'std')")
-      .def_readwrite("normalization", &DASH::ChargeOptions::normalization,
-                     "a ChargeNormalization (default STD_WEIGHTED)")
-      .def_readwrite("defaultStdValue", &DASH::ChargeOptions::defaultStdValue,
+  python::class_<DASH::NormalizationOptions>(
+      "NormalizationOptions",
+      "Controls a normalised assignment, partial charges being the usual "
+      "case.",
+      python::init<>(python::args("self")))
+      .def_readwrite("valueProperty",
+                     &DASH::NormalizationOptions::valueProperty,
+                     "property column holding the values (default 'result')")
+      .def_readwrite("stdProperty", &DASH::NormalizationOptions::stdProperty,
+                     "property column holding their standard deviations "
+                     "(default 'std'); needed by STD_WEIGHTED, used by the "
+                     "others when the file has it")
+      .def_readwrite("normalization",
+                     &DASH::NormalizationOptions::normalization,
+                     "a Normalization (default STD_WEIGHTED)")
+      .def_readwrite("defaultStdValue",
+                     &DASH::NormalizationOptions::defaultStdValue,
                      "substituted for a stored deviation that is not positive "
-                     "(default 0.1)")
-      .def_readwrite("params", &DASH::ChargeOptions::params,
+                     "or absent (default 0.1)")
+      .def_readwrite("params", &DASH::NormalizationOptions::params,
                      "the DASHParams controlling the match");
+  python::scope().attr("ChargeOptions") =
+      python::scope().attr("NormalizationOptions");
 
   python::class_<DASH::DASHTreeNode>(
       "DASHTreeNode",
@@ -432,6 +493,28 @@ BOOST_PYTHON_MODULE(rdDASHTree) {
            (python::arg("self"), python::arg("mol"), python::arg("property"),
             python::arg("params") = DASH::DASHParams()),
            "Returns the value of a property for every atom of a molecule.\n")
+      .def("GetNormalizedMolProperty", getNormalizedMolProperty,
+           (python::arg("self"), python::arg("mol"), python::arg("target"),
+            python::arg("options") = DASH::NormalizationOptions()),
+           "Returns the value of options.valueProperty for every atom, "
+           "adjusted\n"
+           "so the values sum to target. GetPartialCharges is this with the\n"
+           "molecule's formal charge as the target.\n")
+      .def("GetNormalizedMolPropertyDetails", getNormalizedMolPropertyDetails,
+           (python::arg("self"), python::arg("mol"), python::arg("target"),
+            python::arg("options") = DASH::NormalizationOptions()),
+           "Like GetNormalizedMolProperty, but returns a dict also holding "
+           "the\n"
+           "raw tree values ('raw'), the deviations used ('std') and how deep "
+           "each\n"
+           "atom's match went ('match_depth').\n")
+      .def("GetNormalizedMolPropertyBatch", getNormalizedMolPropertyBatch,
+           (python::arg("self"), python::arg("mols"), python::arg("targets"),
+            python::arg("options") = DASH::NormalizationOptions(),
+            python::arg("numThreads") = 1),
+           "GetNormalizedMolProperty for a sequence of molecules, one target "
+           "each.\n"
+           "See GetPartialChargesBatch for the threading semantics.\n")
       .def("GetPartialCharges", getPartialCharges,
            (python::arg("self"), python::arg("mol"),
             python::arg("options") = DASH::ChargeOptions()),
