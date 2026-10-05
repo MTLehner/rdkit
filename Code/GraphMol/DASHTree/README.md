@@ -28,9 +28,9 @@ charges = tree.GetPartialCharges(mol)                      # one float per atom,
 ```
 
 With no argument `GetDASHTree()` uses `$RDKIT_DASH_TREE` if set and otherwise
-the tree in `Data/DASHTree`, and says so once. That tree is the published MBIS
-charge tree pruned to 38 MB; its charges stay within 0.044 e of the full tree's
-(0.0065 e RMS), see [Data/DASHTree/README.md](../../../Data/DASHTree/README.md).
+the tree in `Data/DASHTree`, and says so once. That tree is the legacy MBIS
+charge tree pruned to 38 MB, see below; its charges stay within 0.044 e of the
+full tree's (0.0065 e RMS), and it carries the `result` and `std` columns only.
 For the full tree, or for properties other than MBIS charges, convert one and
 pass it in, as a path or an http(s) URL that is fetched once into a cache:
 
@@ -90,6 +90,11 @@ to the sibling. Measured on the MBIS tree over 118 molecules:
 | 0.02 e (shipped) | 38.2 MB | 0.0065 e | 0.044 e |
 | 0.05 e | 14.3 MB | 0.014 e | 0.059 e |
 | 0.1 e | 4.2 MB | 0.024 e | 0.13 e |
+
+`Data/DASHTree/default_pruned.dash` is the 0.02 e output of the two commands
+above, the most accurate tree under GitHub's 50 MB per-file warning (22 MB as
+git stores it). Both steps are deterministic, so it is reproducible byte for
+byte.
 
 **Train one.** The DASH-tree package builds trees from a trained attention
 model and writes them in the legacy format; a tree built on its own

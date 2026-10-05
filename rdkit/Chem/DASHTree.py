@@ -41,8 +41,8 @@ logger = RDLogger.logger()
 defaultTreeUrl = None
 
 #: the pruned default tree that ships with the RDKit, used when nothing else is
-#: configured; see Data/DASHTree/README.md for what it is and how far it is
-#: from the full tree
+#: configured; Code/GraphMol/DASHTree/README.md says what it is and how far it
+#: is from the full tree
 bundledTreePath = os.path.join(RDConfig.RDDataDir, "DASHTree", "default_pruned.dash")
 
 _bundledWarned = False
