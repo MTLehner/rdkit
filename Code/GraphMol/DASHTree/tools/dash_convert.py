@@ -22,7 +22,7 @@ fields 1/2/3, ``level`` is the node's depth, ``max_attention`` is node field 4
 rounded to float16, and the node tuple's leading id is always its own index.
 Only the child lists and the value columns carry information.
 
-The container it writes is described in ../DESIGN.md. Two decisions shape it:
+Two decisions shape the container it writes:
 
   * Nodes are renumbered in breadth-first order across the whole forest. That
     makes each node's children a contiguous run of ids, so no child-index array
@@ -31,6 +31,14 @@ The container it writes is described in ../DESIGN.md. Two decisions shape it:
     keeps the working set to a couple of pages per atom instead of ten.
   * A node's match key, child range and stop flag live in one 8-byte record, so
     a descent step is a single dependent load.
+
+The hydrogen branch matters: the first descent step out of its root walks to the
+heavy neighbour without accumulating attention, and the precomputed stop flags
+depend on that. It is read off the data -- the hydrogen root is the only root
+whose children attach with con_atom = -1 -- and cross-checked against the
+DASH-tree package when that happens to be importable. Nothing here needs it.
+
+Requires numpy, pandas and pytables.
 
 Usage:
     python dash_convert.py <tree_folder> <out.dash> [--props result,std,...]
@@ -96,16 +104,29 @@ def load_branch(folder, b):
         return pickle.load(f)
 
 
-def hydrogen_branch(n_branches):
-    """Branch index of the hydrogen feature class, or -1."""
+def looks_like_hydrogen_root(tree):
+    """Does every child of this branch's root attach with con_atom = -1?
+
+    A hydrogen's descent starts at its heavy neighbour, and the node for that
+    step has no attachment position. Every other candidate the descent ever
+    generates carries a real position, so no other root has such children.
+    """
+    children = [c for c in tree[0][5] if c != 0]
+    return bool(children) and all(int(tree[c][2]) == -1 for c in children)
+
+
+def hydrogen_branch_from_package(n_branches):
+    """The hydrogen branch according to the DASH-tree package: None if the
+    package is not importable, -1 if its feature list has no hydrogen class
+    among the first n_branches entries."""
     try:
         sys.path.insert(0, os.environ.get("DASH_TREE_REPO", ""))
         from serenityff.charge.tree.atom_features import AtomFeatures
-        for i, f in enumerate(AtomFeatures.feature_list[:n_branches]):
-            if f[0] == HYDROGEN:
-                return i
     except ImportError:
-        pass
+        return None
+    for i, f in enumerate(AtomFeatures.feature_list[:n_branches]):
+        if f[0] == HYDROGEN:
+            return i
     return -1
 
 
@@ -126,28 +147,68 @@ def main(argv=None):
                          "bit-exactness tests do.")
     ap.add_argument("--hydrogen-branch", type=int, default=None,
                     help="branch index of the hydrogen feature class "
-                         "(default: read it from the serenityff package)")
+                         "(default: read it off the data)")
     args = ap.parse_args(argv)
 
     import pandas as pd
 
     folder = args.tree_folder
-    n_branches = len([f for f in os.listdir(folder) if f.endswith(".gz")])
+    if not os.path.isdir(folder):
+        sys.exit(f"{folder} is not a directory")
+    gz = sorted(int(f[:-3]) for f in os.listdir(folder)
+                if f.endswith(".gz") and f[:-3].isdigit())
+    n_branches = len(gz)
+    if n_branches == 0:
+        sys.exit(f"no <n>.gz files in {folder}: a DASH-tree distribution is 0.gz, "
+                 f"0.h5, 1.gz, 1.h5, ... directly inside the folder you pass")
+    if gz != list(range(n_branches)):
+        sys.exit(f"the .gz files in {folder} are not numbered 0..{n_branches - 1} "
+                 f"without gaps")
+    missing_h5 = [b for b in gz if not os.path.exists(os.path.join(folder, f"{b}.h5"))]
+    if missing_h5:
+        sys.exit(f"no .h5 data file for branches {missing_h5[:10]}")
     print(f"branches: {n_branches}")
 
-    h_branch = (args.hydrogen_branch if args.hydrogen_branch is not None
-                else hydrogen_branch(n_branches))
-    if h_branch < 0:
-        sys.exit("could not determine the hydrogen branch index; pass "
-                 "--hydrogen-branch (it decides where the attention "
-                 "accumulation starts, so it must be right)")
-    print(f"hydrogen branch: {h_branch}")
-
-    # ---- pass 1: sizes and the property column list ------------------------
+    # ---- pass 1: sizes, the hydrogen branch and the property column list ----
     branch_n = np.zeros(n_branches, dtype=np.int64)
+    h_candidates = []
     for b in range(n_branches):
-        branch_n[b] = len(load_branch(folder, b))
+        tree = load_branch(folder, b)
+        branch_n[b] = len(tree)
+        if looks_like_hydrogen_root(tree):
+            h_candidates.append(b)
+        del tree
     n_nodes = int(branch_n.sum())
+
+    if args.hydrogen_branch is not None:
+        h_branch = args.hydrogen_branch
+        if not 0 <= h_branch < n_branches:
+            sys.exit(f"--hydrogen-branch {h_branch} is not a branch of this tree")
+        origin = "given"
+        if h_candidates and h_branch not in h_candidates:
+            print(f"WARNING: --hydrogen-branch {h_branch}, but the data says "
+                  f"{h_candidates}", file=sys.stderr)
+    elif len(h_candidates) == 1:
+        h_branch = h_candidates[0]
+        origin = "from the data"
+    else:
+        sys.exit(f"could not read the hydrogen branch off the data: "
+                 f"{len(h_candidates)} roots have children that all attach with "
+                 f"con_atom = -1 ({h_candidates}); pass --hydrogen-branch (it "
+                 f"decides where the attention accumulation starts, so it must "
+                 f"be right)")
+    from_package = hydrogen_branch_from_package(n_branches)
+    if from_package is None:
+        note = "no DASH-tree package importable to cross-check"
+    elif from_package == h_branch:
+        note = "the DASH-tree package agrees"
+    else:
+        print(f"WARNING: using hydrogen branch {h_branch}, but the importable "
+              f"DASH-tree package says {from_package}; the tree may have been "
+              f"built with a different feature list than the package you have "
+              f"installed.", file=sys.stderr)
+        note = f"the importable DASH-tree package says {from_package}"
+    print(f"hydrogen branch: {h_branch} ({origin}; {note})")
     if n_nodes > MAX_NODES:
         sys.exit(f"{n_nodes} nodes exceeds the container's 32-bit node ids")
     branch_root = np.zeros(n_branches, dtype=np.uint32)
