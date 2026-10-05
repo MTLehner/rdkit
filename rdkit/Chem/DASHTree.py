@@ -9,9 +9,12 @@
 #
 """Opening a DASH tree that lives somewhere else, and reading what it matched.
 
-A tree is a few hundred megabytes of published data, so it is not distributed
-with RDKit. GetDASHTree() takes either a local container or a URL to one,
-fetches it once into a cache directory, and opens it from there.
+A full tree is a few hundred megabytes of published data, so it is not
+distributed with RDKit. GetDASHTree() takes either a local container or a URL
+to one, fetches it once into a cache directory, and opens it from there. Given
+nothing, it uses $RDKIT_DASH_TREE, then the default URL once there is one, and
+otherwise the pruned tree in Data/DASHTree, whose charges stay within a few
+hundredths of an electron of the full tree's.
 
 The container has to be in RDKit's own '.dash' format already; nothing here
 converts a tree. Code/GraphMol/DASHTree/tools/dash_convert.py does that.
@@ -28,12 +31,21 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from rdkit import Chem
+from rdkit import Chem, RDConfig, RDLogger
 from rdkit.Chem import rdDASHTree
 
-#: fetched when GetDASHTree() is given no source at all
-#: TODO: replace with the actual default URL, e.g. denmarc.ethz.ch/dash/default.dash
-defaultTreeUrl = "http://localhost:8000/default.dash"
+logger = RDLogger.logger()
+
+#: fetched when GetDASHTree() is given no source and $RDKIT_DASH_TREE is unset;
+#: None until a full container is hosted somewhere permanent
+defaultTreeUrl = None
+
+#: the pruned default tree that ships with the RDKit, used when nothing else is
+#: configured; see Data/DASHTree/README.md for what it is and how far it is
+#: from the full tree
+bundledTreePath = os.path.join(RDConfig.RDDataDir, "DASHTree", "default_pruned.dash")
+
+_bundledWarned = False
 
 
 def _cacheDir():
@@ -72,7 +84,8 @@ def GetDASHTree(source=None, properties=None, prefetch=False, cacheDir=None):
 
     ARGUMENTS:
       - source: path to a '.dash' container, or an http(s) URL of one.
-        Defaults to rdkit.Chem.DASHTree.defaultTreeUrl.
+        Defaults to $RDKIT_DASH_TREE, then rdkit.Chem.DASHTree.defaultTreeUrl,
+        then the pruned tree shipped in Data/DASHTree, which is announced once.
       - properties: the property columns to resolve, None meaning every
         column the file has. Naming the ones you want keeps the rest off
         the heap.
@@ -83,7 +96,16 @@ def GetDASHTree(source=None, properties=None, prefetch=False, cacheDir=None):
 
     RETURNS: an rdDASHTree.DASHTree
     """
-  source = source or defaultTreeUrl
+  global _bundledWarned
+  if source is None:
+    source = os.environ.get("RDKIT_DASH_TREE") or defaultTreeUrl
+  if source is None:
+    if not _bundledWarned:
+      logger.warning("no DASH tree given: using the pruned tree shipped with the RDKit, "
+                     "whose charges are within about 0.05 e of the full tree's. Pass a "
+                     "container or set RDKIT_DASH_TREE for the full tree.")
+      _bundledWarned = True
+    source = bundledTreePath
   # a windows path has a single letter scheme, so test for the ones we serve
   if urlparse(str(source)).scheme in ("http", "https"):
     source = _fetch(str(source), cacheDir or _cacheDir())

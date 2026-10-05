@@ -288,6 +288,59 @@ class TestPruneTool(unittest.TestCase):
     self.assertAlmostEqual(tree.GetAtomProperty(self.mol, 2, "result"), -0.60)
 
 
+class TestBundledTree(unittest.TestCase):
+  """The pruned tree in Data/DASHTree, which GetDASHTree() falls back to."""
+
+  @classmethod
+  def setUpClass(cls):
+    cls.saved = os.environ.pop("RDKIT_DASH_TREE", None)
+    cls.tree = DASHTree.GetDASHTree()
+
+  @classmethod
+  def tearDownClass(cls):
+    if cls.saved is not None:
+      os.environ["RDKIT_DASH_TREE"] = cls.saved
+
+  def testIsThePublishedTreePruned(self):
+    self.assertEqual(self.tree.GetFileName(), DASHTree.bundledTreePath)
+    self.assertEqual(self.tree.GetNumAtomFeatures(), 122)
+    self.assertEqual(self.tree.GetAtomFeature(37), (1, 1, 0, False, 0))
+    self.assertLess(self.tree.GetNumNodes(), 2500000)  # the full tree has 9.4 million
+    self.assertEqual(sorted(self.tree.GetAvailablePropertyNames()), ["result", "std"])
+
+  def testEnvironmentOverrides(self):
+    os.environ["RDKIT_DASH_TREE"] = _fixturePath()
+    try:
+      self.assertEqual(DASHTree.GetDASHTree().GetNumAtomFeatures(), 4)
+    finally:
+      del os.environ["RDKIT_DASH_TREE"]
+
+  def testChargesStayCloseToThePythonPackage(self):
+    # test_data/dash_ref_values.txt holds what the DASH-tree python package
+    # computes with the full tree; pruning at 0.02 e was measured to move the
+    # std-weighted charges by 0.0065 e RMS and 0.044 e at most
+    testData = os.path.join(RDConfig.RDBaseDir, "Code", "GraphMol", "DASHTree", "test_data")
+    mols = [
+      m for m in Chem.SDMolSupplier(os.path.join(testData, "dash_ref_mols.sdf"), removeHs=False)
+      if m is not None
+    ]
+    self.assertEqual(len(mols), 100)
+    charges = [self.tree.GetPartialCharges(m) for m in mols]
+    diffs = []
+    with open(os.path.join(testData, "dash_ref_values.txt")) as f:
+      for line in f:
+        parts = line.split()
+        if not parts or parts[0] == "#":
+          continue
+        molIdx, atomIdx, reference = int(parts[0]), int(parts[1]), float(parts[7])
+        diffs.append(charges[molIdx][atomIdx] - reference)
+    self.assertEqual(len(diffs), sum(m.GetNumAtoms() for m in mols))
+    self.assertLess(max(abs(d) for d in diffs), 0.06)
+    self.assertLess(math.sqrt(sum(d * d for d in diffs) / len(diffs)), 0.01)
+    for mol, q in zip(mols, charges):
+      self.assertAlmostEqual(sum(q), sum(a.GetFormalCharge() for a in mol.GetAtoms()), places=10)
+
+
 treeFile = os.environ.get("DASH_TREE_FILE")
 
 

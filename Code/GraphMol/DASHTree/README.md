@@ -79,9 +79,14 @@ molecules (5,218 atoms), std-weighted charges:
 
 | `--tolerance` | nodes kept | container | RMSD | max error |
 |---|---|---|---|---|
+| 0.01 e | 36 % + placeholders | 63.7 MB | 0.0034 e | 0.033 e |
+| 0.02 e | 20 % + placeholders | 38.2 MB | 0.0065 e | 0.044 e |
 | 0.05 e | 6.5 % + placeholders | 14.3 MB | 0.014 e | 0.06 e |
 | 0.1 e | 1.7 % + placeholders | 4.2 MB | 0.024 e | 0.13 e |
 | 0.2 e | 0.2 % + placeholders | 0.7 MB | 0.037 e | 0.20 e |
+
+The tree shipped in `Data/DASHTree` is the 0.02 e one; its README has the
+full comparison and the reason.
 
 ## Using a container
 
@@ -91,6 +96,7 @@ from rdkit.Chem import rdDASHTree
 from rdkit.Chem.DASHTree import GetDASHTree, GetAtomMatchSmarts
 
 tree = GetDASHTree("charges.dash", ["result", "std"])   # a path or an http(s) URL
+tree = GetDASHTree()   # $RDKIT_DASH_TREE, else the pruned tree in Data/DASHTree
 mol = Chem.AddHs(Chem.MolFromSmiles("CC(=O)Nc1ccc(O)cc1"))  # hydrogens must be explicit
 charges = tree.GetPartialCharges(mol)                    # sum to the formal charge
 details = tree.GetPartialChargesDetails(mol)             # raw values, stds, match depths
