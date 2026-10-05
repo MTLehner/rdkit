@@ -49,6 +49,40 @@ is 151 MB for the default tree. A successful run reports the branch count, the
 hydrogen branch, the node count, every column with its dtype and the blocks it
 wrote; `nodes past the default attention threshold` is 0 on the published trees.
 
+## Pruning a container
+
+`tools/dash_prune.py` writes a smaller container holding a subset of the nodes.
+Dropping a node drops its subtree, and an atom whose descent reaches the cut
+reads the deepest node still there, so a pruned tree answers for every molecule
+the full tree accepts, with a shallower, more general substructure where nodes
+are missing. Roots and the children of the hydrogen root always stay.
+
+```
+python Code/GraphMol/DASHTree/tools/dash_prune.py default.dash small.dash --tolerance 0.05
+```
+
+| rule | keeps |
+|---|---|
+| `--tolerance EPS` | a subtree only if some value in it differs from the parent's by at least EPS (column `--value-property`, default `result`): the nodes that change the answer |
+| `--max-level L` | levels 0..L |
+| `--min-size S` | nodes whose `--size-property` (default `size`, the training support) is at least S |
+| `--molecules FILE` | additionally every node on the descent paths of these molecules (`.sdf` or `.smi`), so the result stays exact for them |
+
+The rules combine with "and", and `--molecules` on its own keeps just those
+paths; `--props` and `--drop-source-ids` trim columns as in the converter. A
+removed child that a kept sibling follows stays as a value-less leaf, so the
+descent still stops where the subtree was cut instead of wandering to the
+sibling; those placeholders are about half as many again as the kept nodes.
+
+Measured on the default MBIS tree against the full tree, over 118 test
+molecules (5,218 atoms), std-weighted charges:
+
+| `--tolerance` | nodes kept | container | RMSD | max error |
+|---|---|---|---|---|
+| 0.05 e | 6.5 % + placeholders | 14.3 MB | 0.014 e | 0.06 e |
+| 0.1 e | 1.7 % + placeholders | 4.2 MB | 0.024 e | 0.13 e |
+| 0.2 e | 0.2 % + placeholders | 0.7 MB | 0.037 e | 0.20 e |
+
 ## Using a container
 
 ```python

@@ -44,7 +44,8 @@ depend on that. It is the class with Z = 1, and the data has to agree: the
 hydrogen root is the only root whose children attach with con_atom = -1, so a
 tree built on a different feature list than the one given is caught here.
 
-Requires numpy, pandas and pytables; nothing from the DASH-tree package.
+Requires numpy, pandas and pytables; nothing from the DASH-tree package. The
+container layout lives in dash_container.py, shared with dash_prune.py.
 
 Usage:
     python dash_convert.py <tree_folder> <out.dash> [--props result,std,...]
@@ -55,14 +56,18 @@ import gzip
 import json
 import os
 import pickle
-import struct
 import sys
 
 import numpy as np
 
-MAGIC = b"DASHTREE"
-FORMAT_VERSION = 3
-ENDIAN_ID = 0xDEADBEEF
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dash_container import (  # noqa: E402
+    DEFAULT_ATTENTION_THRESHOLD, DTYPE_F16, DTYPE_F32, DTYPE_F64, DTYPE_I32,
+    FEATURE_DTYPE, KEY_CON_ATOM_BITS, KEY_CON_TYPE_BITS, MAX_CHILDREN, MAX_CON_ATOM,
+    MAX_CON_TYPE, MAX_NODES, NODE_FLAG_STOP, NP_DTYPE, RECORD_DTYPE, pack_key,
+    write_container)
+
+_NP_DTYPE = {tag: dt.type for tag, dt in NP_DTYPE.items()}
 
 # (atomicNum, degree, formalCharge, conjugated, numHs) of the published trees'
 # 122 classes, in branch order: serenityff.charge.tree.atom_features
@@ -100,33 +105,6 @@ STANDARD_FEATURES = [
     (16, 3, 1, 0, 0), (16, 4, 0, 0, 0), (16, 4, 0, 0, 1), (16, 4, 0, 1, 0),
     (16, 4, 1, 0, 0), (16, 4, 1, 1, 0),
 ]
-FEATURE_DTYPE = np.dtype([("atomicNum", "u1"), ("degree", "u1"), ("formalCharge", "i1"),
-                          ("conjugated", "u1"), ("numHs", "u1"), ("reserved", "3u1")])
-
-HEADER_SIZE = 128
-PROP_ENTRY_SIZE = 48
-PROP_NAME_LEN = 32
-ALIGN = 64
-NODE_RECORD_SIZE = 8
-
-DTYPE_F16, DTYPE_F32, DTYPE_I32, DTYPE_F64 = 1, 2, 3, 4
-_NP_DTYPE = {DTYPE_F16: np.float16, DTYPE_F32: np.float32,
-             DTYPE_I32: np.int32, DTYPE_F64: np.float64}
-
-# key packing, mirroring AtomFeatures.h
-KEY_ATOM_BITS, KEY_CON_ATOM_BITS, KEY_CON_TYPE_BITS = 8, 4, 3
-MAX_ATOM_TYPE = (1 << KEY_ATOM_BITS) - 1     # 255
-MAX_CON_ATOM = (1 << KEY_CON_ATOM_BITS) - 2  # 14, stored as conAtom + 1
-MAX_CON_TYPE = (1 << KEY_CON_TYPE_BITS) - 2  # 6,  stored as conType + 1
-
-MAX_CHILDREN = 255          # numChildren is one byte
-MAX_NODES = 0xFFFFFFFF      # firstChild is four bytes
-
-NODE_FLAG_STOP = 0x01
-
-# the default cumulative-attention threshold the stop flag is precomputed for
-DEFAULT_ATTENTION_THRESHOLD = 10.0
-
 # h5 columns that merely duplicate the topology and are therefore never stored
 REDUNDANT_COLUMNS = ("level", "atom_type", "con_atom", "con_type", "max_attention")
 
@@ -134,15 +112,6 @@ REDUNDANT_COLUMNS = ("level", "atom_type", "con_atom", "con_type", "max_attentio
 # neighbour; the descent spends its first level getting there and does not
 # accumulate that level's attention, which the stop flag has to account for
 HYDROGEN = 1
-
-
-def pack_key(atom_type, con_atom, con_type):
-    return (atom_type | ((con_atom + 1) << KEY_ATOM_BITS)
-            | ((con_type + 1) << (KEY_ATOM_BITS + KEY_CON_ATOM_BITS)))
-
-
-def align_up(n):
-    return (n + ALIGN - 1) // ALIGN * ALIGN
 
 
 def load_branch(folder, b):
@@ -417,58 +386,24 @@ def main(argv=None):
           f"max children {max_children}")
 
     # ---- write -------------------------------------------------------------
-    records = np.zeros(n_nodes, dtype=[("key", "<u2"), ("nChildren", "u1"),
-                                      ("flags", "u1"), ("firstChild", "<u4")])
+    records = np.zeros(n_nodes, dtype=RECORD_DTYPE)
     records["key"] = node_key[:n_nodes]
     records["nChildren"] = node_children[:n_nodes]
     records["flags"] = node_flags[:n_nodes]
     records["firstChild"] = node_first[:n_nodes]
-    assert records.itemsize == NODE_RECORD_SIZE, records.itemsize
 
-    blocks = [("branchRoot", branch_root),
-              ("featureTable", feature_table),
-              ("nodeRecord", records),
-              ("nodeAttn", node_attn[:n_nodes])]
-    if not args.no_source_ids:
-        blocks.append(("nodeSourceId", node_source[:n_nodes]))
-    blocks += [(f"prop:{c}", a) for c, a in zip(props, prop_arrays)]
-
-    prop_dir_off = HEADER_SIZE
-    off = align_up(HEADER_SIZE + PROP_ENTRY_SIZE * len(props))
-    offsets = {}
-    for name, arr in blocks:
-        offsets[name] = off
-        off = align_up(off + arr.nbytes)
-    file_size = off
-    have_source = 0 if args.no_source_ids else offsets["nodeSourceId"]
-
-    with open(args.out, "wb") as f:
-        f.write(struct.pack(
-            "<8sIIIIIIdQQQQQQ",
-            MAGIC, FORMAT_VERSION, ENDIAN_ID, n_branches, len(props),
-            n_nodes, max_children, DEFAULT_ATTENTION_THRESHOLD,
-            offsets["branchRoot"], offsets["nodeRecord"], offsets["nodeAttn"],
-            have_source, prop_dir_off, file_size))
-        f.write(struct.pack("<hhh", max_atom_type, max_con_atom, max_con_type))
-        f.write(struct.pack("<HQ", n_branches, offsets["featureTable"]))
-        f.write(b"\0" * (HEADER_SIZE - f.tell()))
-
-        for col, dt in zip(props, prop_dtypes):
-            nm = col.encode("utf-8")
-            if len(nm) >= PROP_NAME_LEN:
-                sys.exit(f"property name too long: {col}")
-            f.write(nm + b"\0" * (PROP_NAME_LEN - len(nm)))
-            f.write(struct.pack("<B7xQ", dt, offsets[f"prop:{col}"]))
-
-        for name, arr in blocks:
-            f.write(b"\0" * (offsets[name] - f.tell()))
-            f.write(arr.tobytes())
-        f.write(b"\0" * (file_size - f.tell()))
+    try:
+        blocks = write_container(
+            args.out, branch_root, feature_table, records, node_attn[:n_nodes],
+            None if args.no_source_ids else node_source[:n_nodes],
+            list(zip(props, prop_dtypes, prop_arrays)),
+            DEFAULT_ATTENTION_THRESHOLD, (max_atom_type, max_con_atom, max_con_type))
+    except ValueError as e:
+        sys.exit(str(e))
 
     print(f"\nwrote {args.out}  {os.path.getsize(args.out)/1e6:.1f} MB")
-    for name, arr in blocks:
-        print(f"    {name:<28} n={arr.size:>10,}  {arr.nbytes/1e6:>7.1f} MB "
-              f"@ {offsets[name]}")
+    for name, arr, off in blocks:
+        print(f"    {name:<28} n={arr.size:>10,}  {arr.nbytes/1e6:>7.1f} MB @ {off}")
 
 
 if __name__ == "__main__":

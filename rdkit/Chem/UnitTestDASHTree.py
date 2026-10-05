@@ -20,8 +20,10 @@ last class runs against it when DASH_TREE_FILE points at a converted container
 and is skipped otherwise.
 """
 
+import contextlib
 import math
 import os
+import shutil
 import struct
 import tempfile
 import unittest
@@ -222,6 +224,68 @@ class TestSyntheticTree(unittest.TestCase):
     self.assertIn((0, 1, 2, 8), self.mol.GetSubstructMatches(unfolded, uniquify=False))
     folded = DASHTree.NodePathToQueryMol(self.tree, path)
     self.assertTrue(Chem.MolFromSmiles("CCO").HasSubstructMatch(folded))
+
+
+class TestPruneTool(unittest.TestCase):
+  """tools/dash_prune.py, on the synthetic tree."""
+
+  @classmethod
+  def setUpClass(cls):
+    import importlib.util
+    toolPath = os.path.join(RDConfig.RDBaseDir, "Code", "GraphMol", "DASHTree", "tools",
+                            "dash_prune.py")
+    spec = importlib.util.spec_from_file_location("dash_prune", toolPath)
+    cls.prune = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cls.prune)
+    cls.mol = Chem.AddHs(Chem.MolFromSmiles("CCO"))
+    cls.full = rdDASHTree.DASHTree(_fixturePath(), ["result", "std"])
+    # a mapped container cannot be deleted while a tree holds it, so the
+    # directory outlives the tests rather than each one
+    cls.tmpDir = tempfile.mkdtemp()
+
+  @classmethod
+  def tearDownClass(cls):
+    shutil.rmtree(cls.tmpDir, ignore_errors=True)
+
+  def _pruned(self, *args):
+    out = os.path.join(self.tmpDir, f"{self._testMethodName}.dash")
+    with open(os.devnull, "w") as sink, contextlib.redirect_stdout(sink):
+      self.prune.main([_fixturePath(), out, *args])
+    return rdDASHTree.DASHTree(out, ["result", "std"])
+
+  def testDepthCut(self):
+    tree = self._pruned("--max-level", "1")
+    self.assertEqual(tree.GetNumNodes(), 12)
+    self.assertEqual(tree.GetNumAtomFeatures(), 4)
+    # every descent now ends one level below the root; a hydrogen still finds
+    # its heavy neighbour there, and the charges still sum to the formal charge
+    self.assertEqual(tree.GetPartialChargesDetails(self.mol)["match_depth"], [2] * 9)
+    self.assertEqual([c.GetConAtom() for c in tree.GetRoot(H)], [-1, -1, -1])
+    self.assertAlmostEqual(sum(tree.GetPartialCharges(self.mol)), 0.0, places=12)
+
+  def testMoleculePathsStayExact(self):
+    sdf = os.path.join(self.tmpDir, "ethanol.sdf")
+    with Chem.SDWriter(sdf) as w:
+      w.write(self.mol)
+    tree = self._pruned("--molecules", sdf)
+    # only the nodes ethanol descends through survive, and they are enough
+    self.assertEqual(tree.GetNumNodes(), 15)
+    self.assertEqual(tree.GetPartialCharges(self.mol), self.full.GetPartialCharges(self.mol))
+    for atom in range(self.mol.GetNumAtoms()):
+      self.assertEqual(len(tree.GetAtomNodePath(self.mol, atom)),
+                       len(self.full.GetAtomNodePath(self.mol, atom)))
+
+  def testToleranceCut(self):
+    # Under the O root (-0.60) the H child's subtree (-0.65, -0.70) is within
+    # 0.3 e and goes; the P child (-0.99) is not and stays. Were the H child
+    # simply gone, the O atom's descent would take the P child instead -- its
+    # key matches the neighbouring C -- and read -0.99. The placeholder left in
+    # its place makes the descent stop there and read the root.
+    tree = self._pruned("--tolerance", "0.3")
+    self.assertLess(tree.GetNumNodes(), 18)
+    self.assertEqual(tree.GetAtomNodePath(self.mol, 2), [O, 0, 1])
+    self.assertTrue(math.isnan(tree.GetNode(O, 1).GetValue("result")))
+    self.assertAlmostEqual(tree.GetAtomProperty(self.mol, 2, "result"), -0.60)
 
 
 treeFile = os.environ.get("DASH_TREE_FILE")
