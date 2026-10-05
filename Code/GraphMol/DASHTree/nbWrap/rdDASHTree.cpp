@@ -61,7 +61,8 @@ nb::tuple tupleFrom(const std::vector<T> &values) {
 const char *moduleDoc =
     "DASH: per-atom properties and partial charges from a Dynamic "
     "Attention-based Substructure Hierarchy.\n\n"
-    "The tree itself is a data file. Convert a DASH-tree distribution with\n"
+    "The tree itself is a data file. Convert a legacy tree of the DASH-tree\n"
+    "package with\n"
     "Code/GraphMol/DASHTree/tools/dash_convert.py and hand the resulting\n"
     "'.dash' file to DASHTree:\n\n"
     "  >>> from rdkit import Chem\n"

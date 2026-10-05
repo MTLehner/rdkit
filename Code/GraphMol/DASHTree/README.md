@@ -10,8 +10,11 @@ descent stops carries the value. It is the method of the python
 in C++ with the same results to the last bit, a few hundred times faster, and
 reading its tree from a memory-mapped file instead of 3 GB of heap.
 
-The tree is data, not code. It lives in a `.dash` container, and three ways of
-getting one are described below.
+The tree is data, not code. It lives in a `.dash` container, RDKit's own format,
+whose layout is defined by the structs in `DASHTreeImpl.h` and mirrored in
+`tools/dash_container.py`. The python package's trees come in a different, older
+layout, called the *legacy* format here, which `tools/dash_convert.py` turns
+into a container.
 
 ## Quick start
 
@@ -35,11 +38,11 @@ pass it in, as a path or an http(s) URL that is fetched once into a cache:
 tree = GetDASHTree("default.dash", ["result", "std"])      # resolve only the columns you need
 ```
 
-## Getting a tree
+## Getting a legacy tree
 
-**Convert a published one.** A DASH-tree distribution is a folder of
-`0.gz, 0.h5, 1.gz, 1.h5, ...`, one pair per atom-feature branch. In a checkout
-of the DASH-tree repository the MBIS charge tree is
+**Convert it.** A legacy tree is a folder of `0.gz, 0.h5, 1.gz, 1.h5, ...`, one
+pair per atom-feature branch, as the DASH-tree package stores them. In a
+checkout of its repository the MBIS charge tree is
 `serenityff/charge/data/default_dash_tree`; the tree with every property
 (AM1BCC, RESP, Mulliken, DFT-D4 C6 and polarizability, dual descriptors,
 dipoles) is downloaded by the package into
@@ -51,7 +54,7 @@ python Code/GraphMol/DASHTree/tools/dash_convert.py <tree_folder> default.dash
 python Code/GraphMol/DASHTree/tools/dash_convert.py <tree_folder> charges.dash --props result,std --no-source-ids
 ```
 
-The first keeps every column plus the map back to the python package's node
+The first keeps every column plus the map back to the legacy tree's node
 numbering (226 MB for the MBIS tree, ~100 s); the second is the 151 MB
 charges-only container to hand around. Further options: `--float32` halves the
 float64 property columns at the cost of bit-exactness against python,
@@ -89,7 +92,8 @@ to the sibling. Measured on the MBIS tree over 118 molecules:
 | 0.1 e | 4.2 MB | 0.024 e | 0.13 e |
 
 **Train one.** The DASH-tree package builds trees from a trained attention
-model; a tree built on its own atom-feature list converts with `--features`.
+model and writes them in the legacy format; a tree built on its own
+atom-feature list converts with `--features`.
 
 ## Using a tree from python
 
@@ -161,8 +165,8 @@ DASHTree.{h,cpp}        the public API; mapping, validating and descending a con
 DASHTreeImpl.h          container structs and the matcher (not installed)
 Charges.cpp             normalisation and the threaded batch entry points
 Wrap/, nbWrap/          boost::python and nanobind bindings
-tools/                  dash_convert.py, dash_prune.py and the format module they share
 test_data/              a 1 kB synthetic tree; 100 molecules with the python package's values
+tools/                  dash_convert.py (legacy tree -> container), dash_prune.py, the format module they share
 ```
 
 `catch_tests.cpp` and `rdkit/Chem/UnitTestDASHTree.py` run against the

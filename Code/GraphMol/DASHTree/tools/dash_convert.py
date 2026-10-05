@@ -7,10 +7,10 @@
 #  which is included in the file license.txt, found at the root
 #  of the RDKit source tree.
 #
-"""Convert a DASH tree into RDKit's .dash container.
+"""Convert a legacy DASH tree into RDKit's .dash container.
 
-The DASH-tree python package stores a tree as a pair of files per atom-feature
-branch:
+The DASH-tree python package stores a tree in what is called the legacy format
+here: a pair of files per atom-feature branch,
 
   <b>.gz   gzipped pickle of a list of node tuples
            (id, atom_type, con_atom, con_type, attention, [child ids])
@@ -149,7 +149,7 @@ def load_features(path):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("tree_folder")
+    ap.add_argument("tree_folder", help="a legacy tree: the folder holding 0.gz, 0.h5, ...")
     ap.add_argument("out")
     ap.add_argument("--props", default=None,
                     help="comma separated property columns to keep "
@@ -158,7 +158,7 @@ def main(argv=None):
                     help="narrow every float column to float32. Halves the "
                          "float64 columns at the cost of reproducing them exactly.")
     ap.add_argument("--no-source-ids", action="store_true",
-                    help="omit the map back to the python package's node numbering. "
+                    help="omit the map back to the legacy tree's node numbering. "
                          "It is never read unless a caller asks for it, and the "
                          "bit-exactness tests do.")
     ap.add_argument("--features", default=None,
@@ -179,8 +179,8 @@ def main(argv=None):
                 if f.endswith(".gz") and f[:-3].isdigit())
     n_branches = len(gz)
     if n_branches == 0:
-        sys.exit(f"no <n>.gz files in {folder}: a DASH-tree distribution is 0.gz, "
-                 f"0.h5, 1.gz, 1.h5, ... directly inside the folder you pass")
+        sys.exit(f"no <n>.gz files in {folder}: a legacy tree is 0.gz, 0.h5, "
+                 f"1.gz, 1.h5, ... directly inside the folder you pass")
     if gz != list(range(n_branches)):
         sys.exit(f"the .gz files in {folder} are not numbered 0..{n_branches - 1} "
                  f"without gaps")

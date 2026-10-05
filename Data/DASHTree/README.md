@@ -7,8 +7,8 @@ published default MBIS charge tree of the
 nodes that change a charge by at least 0.02 e. It carries the `result` and
 `std` columns only.
 
-Made with the tools in `Code/GraphMol/DASHTree/tools/`, from the
-`serenityff/charge/data/default_dash_tree` folder of a DASH-tree checkout:
+Made with the tools in `Code/GraphMol/DASHTree/tools/`, from the legacy tree in
+the `serenityff/charge/data/default_dash_tree` folder of a DASH-tree checkout:
 
 ```
 python dash_convert.py <DASH-tree>/serenityff/charge/data/default_dash_tree default.dash

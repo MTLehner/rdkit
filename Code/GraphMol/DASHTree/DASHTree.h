@@ -25,7 +25,8 @@
 
   The tree itself is a data file, not part of the library: construct a DASHTree
   with the path to a \c .dash container produced by \c tools/dash_convert.py
-  from a DASH-tree distribution. The file is memory mapped, so construction
+  from a legacy tree of the DASH-tree python package. The file is memory
+  mapped, so construction
   costs microseconds and only the pages a query actually visits are ever read.
 
   Which properties a tree carries is a property of the file. Name the ones you

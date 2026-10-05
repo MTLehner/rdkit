@@ -155,7 +155,7 @@ class Container:
     """The branch matched through the heavy neighbour: the class with Z = 1.
 
     Its root's children attach with conAtom = -1, the "no bond" position, and
-    no other node in a published tree does; a table that disagrees with the
+    no other node in a legacy tree does; a table that disagrees with the
     data on this is an error, since the tree was then built on another table.
     """
     from_table = [b for b in range(self.n_branches) if self.features["atomicNum"][b] == 1]
