@@ -7,23 +7,21 @@
 #  which is included in the file license.txt, found at the root
 #  of the RDKit source tree.
 #
-"""Tests for rdkit.Chem.DASHTree and rdkit.Chem.rdDASHTree.
+"""Tests for rdkit.Chem.DASHTree, the pure-python side: opening a tree, the
+synthetic fixture and the pattern writer. The extension itself is tested in
+Code/GraphMol/DASHTree/Wrap/testDASHTree.py.
 
-Most of these run against a small synthetic tree, test_data/dash_test_tree.dash,
-written by _writeSyntheticTree() below and checked in so the C++ tests can share
-it. It knows ethanol and nothing else, and its values are made up, so what it
-exercises is the machinery: the descent, the property fallback, the stop flag,
-the normalisations, the node API and the pattern writer.
+_writeSyntheticTree() writes test_data/dash_test_tree.dash, a tree that knows
+ethanol and nothing else, checked in so the C++ and the extension tests can
+share it; the first test asserts the checked-in bytes are what it writes.
 
 The published tree is a few hundred megabytes and is not in the repository; the
 last class runs against it when DASH_TREE_FILE points at a converted container
 and is skipped otherwise.
 """
 
-import contextlib
 import math
 import os
-import shutil
 import struct
 import tempfile
 import unittest
@@ -121,130 +119,6 @@ class TestSyntheticTree(unittest.TestCase):
       with open(path, "rb") as f, open(_fixturePath(), "rb") as g:
         self.assertEqual(f.read(), g.read())
 
-  def testFeatureIndices(self):
-    # the classes come from the table in the file, not from the code
-    self.assertEqual(self.tree.GetNumAtomFeatures(), 4)
-    got = [self.tree.GetAtomFeatureIndex(a) for a in self.mol.GetAtoms()]
-    self.assertEqual(got, [M, P, O, H, H, H, H, H, H])
-    self.assertEqual([self.tree.GetAtomFeature(i) for i in range(4)], FEATURES)
-    benzene = Chem.AddHs(Chem.MolFromSmiles("c1ccccc1"))
-    self.assertEqual(self.tree.GetAtomFeatureIndex(benzene.GetAtomWithIdx(0)), -1)
-    with self.assertRaises(ValueError):
-      self.tree.GetAtomFeature(4)
-
-  def testDescent(self):
-    self.assertEqual(self.tree.GetNumBranches(), 4)
-    self.assertEqual(self.tree.GetNumNodes(), 18)
-    expected = {
-      0: [M, 0, 1, 2, 3],
-      1: [P, 0, 1, 3],
-      2: [O, 0, 1],
-      3: [H, 0, 1, 4],
-      6: [H, 0, 2],
-      8: [H, 0, 3, 5]
-    }
-    for atom, path in expected.items():
-      self.assertEqual(self.tree.GetAtomNodePath(self.mol, atom), path)
-    self.assertEqual(self.tree.GetMatchedSubstructure(self.mol, 0), (0, 1, 2, 8))
-    self.assertEqual(self.tree.GetMatchedSubstructure(self.mol, 3), (0, 1))
-    # the O descent stops at the flagged node; told to read the attentions
-    # instead of the flag, it carries on to the node below
-    params = rdDASHTree.DASHParams()
-    params.attentionThreshold = 100.0
-    self.assertEqual(self.tree.GetAtomNodePath(self.mol, 2, params), [O, 0, 1, 3])
-    self.assertAlmostEqual(self.tree.GetAtomProperty(self.mol, 2, "result"), -0.65)
-    self.assertAlmostEqual(self.tree.GetAtomProperty(self.mol, 2, "result", params), -0.70)
-
-  def testCharges(self):
-    raw = [-0.45, -0.18, -0.65, 0.12, 0.12, 0.12, 0.08, 0.08, 0.31]  # deepest node with a value
-    std = [0.03, 0.02, 0.05, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02]
-    deficit = 0.0 - sum(raw)
-    details = self.tree.GetPartialChargesDetails(self.mol)
-    for got, want in zip(details["raw"], raw):
-      self.assertAlmostEqual(got, want)
-    for got, want in zip(details["std"], std):
-      self.assertAlmostEqual(got, want)
-    self.assertEqual(details["match_depth"], [4, 3, 2, 3, 3, 3, 2, 2, 3])
-    N = rdDASHTree.ChargeNormalization
-    for normalization, want in ((N.NONE, raw), (N.SYMMETRIC, [r + deficit / 9 for r in raw]),
-                                (N.STD_WEIGHTED,
-                                 [r + deficit * s / sum(std) for r, s in zip(raw, std)])):
-      options = rdDASHTree.ChargeOptions()
-      options.normalization = normalization
-      for got, w in zip(self.tree.GetPartialCharges(self.mol, options), want):
-        self.assertAlmostEqual(got, w)
-    # a batch agrees with the single-molecule call, and None yields an empty row
-    batch = self.tree.GetPartialChargesBatch([self.mol, None, self.mol], numThreads=0)
-    self.assertEqual(batch[1], [])
-    self.assertEqual(batch[0], self.tree.GetPartialCharges(self.mol))
-    self.assertEqual(batch[0], batch[2])
-
-  def testNormalizedMolProperty(self):
-    # charges are the normalised assignment with the formal charge as target
-    charges = self.tree.GetPartialCharges(self.mol)
-    self.assertEqual(self.tree.GetNormalizedMolProperty(self.mol, 0.0), charges)
-    self.assertAlmostEqual(sum(self.tree.GetNormalizedMolProperty(self.mol, 1.0)), 1.0, places=12)
-    details = self.tree.GetNormalizedMolPropertyDetails(self.mol, 1.0)
-    self.assertEqual(sorted(details), ["match_depth", "raw", "std", "values"])
-    self.assertEqual(details["raw"], self.tree.GetPartialChargesDetails(self.mol)["raw"])
-    batch = self.tree.GetNormalizedMolPropertyBatch([self.mol, None, self.mol], [0.0, 0.0, 1.0])
-    self.assertEqual(batch[0], charges)
-    self.assertEqual(batch[1], [])
-    self.assertAlmostEqual(sum(batch[2]), 1.0, places=12)
-    with self.assertRaises(ValueError):  # one target per molecule
-      self.tree.GetNormalizedMolPropertyBatch([self.mol], [0.0, 1.0])
-    # the options class and the normalisation enum keep their charge names too
-    self.assertIs(rdDASHTree.ChargeOptions, rdDASHTree.NormalizationOptions)
-    self.assertIs(rdDASHTree.ChargeNormalization, rdDASHTree.Normalization)
-    options = rdDASHTree.NormalizationOptions()
-    options.normalization = rdDASHTree.Normalization.NONE
-    self.assertEqual(self.tree.GetNormalizedMolProperty(self.mol, 1.0, options), details["raw"])
-    # a column without a deviation column still normalises, except by weight
-    options.stdProperty = "no_such_column"
-    options.normalization = rdDASHTree.Normalization.SYMMETRIC
-    self.assertAlmostEqual(sum(self.tree.GetNormalizedMolProperty(self.mol, 1.0, options)), 1.0,
-                           places=12)
-    options.normalization = rdDASHTree.Normalization.STD_WEIGHTED
-    with self.assertRaises(ValueError):
-      self.tree.GetNormalizedMolProperty(self.mol, 1.0, options)
-    options.stdProperty = "std"
-    options.defaultStdValue = 0.0
-    with self.assertRaises(ValueError):  # would divide by the deviation total
-      self.tree.GetNormalizedMolProperty(self.mol, 1.0, options)
-
-  def testRefusals(self):
-    with self.assertRaises(ValueError):  # methane's carbon is not a DASH class
-      self.tree.GetPartialCharges(Chem.AddHs(Chem.MolFromSmiles("C")))
-    with self.assertRaises(ValueError):  # a class the synthetic tree has no data for
-      self.tree.GetPartialCharges(Chem.AddHs(Chem.MolFromSmiles("c1ccccc1")))
-    with self.assertRaises(ValueError):
-      rdDASHTree.DASHTree(_fixturePath(), ["result", "definitely_absent"])
-
-  def testNodes(self):
-    root = self.tree.GetRoot(O)
-    self.assertEqual((root.GetBranch(), root.GetId(), root.GetAtomFeatureIndex()), (O, 0, O))
-    self.assertEqual((root.GetConAtom(), root.GetConType()), (-1, -1))
-    self.assertEqual(root.GetFeature(), (8, 2, 0, False, 1))
-    self.assertEqual(len(root), 2)
-    first, second = root
-    self.assertEqual((first.GetAtomFeatureIndex(), first.GetConAtom(), first.GetConType()),
-                     (H, 0, 1))
-    self.assertAlmostEqual(first.GetAttention(), 11.0)
-    self.assertTrue(first.Stops())
-    self.assertFalse(second.Stops())
-    self.assertAlmostEqual(second.GetValue("result"), -0.99)
-    self.assertEqual(root[-1].GetId(), second.GetId())
-    self.assertEqual(first[0].GetId(), 3)
-    self.assertTrue(math.isnan(self.tree.GetNode(M, 3).GetValue("result")))
-    with self.assertRaises(IndexError):
-      root[2]
-    with self.assertRaises(ValueError):
-      root.GetChild(2)
-    with self.assertRaises(ValueError):
-      self.tree.GetNode(4, 0)
-    with self.assertRaises(ValueError):
-      root.GetValue("no_such_property")
-
   def testPatterns(self):
     self.assertEqual(DASHTree.GetAtomMatchSmarts(self.tree, self.mol, 0),
                      "[#6X4H3+0:1]-[#6X4H2+0]-[#8X2H1+0]")
@@ -254,71 +128,11 @@ class TestSyntheticTree(unittest.TestCase):
     self.assertEqual(DASHTree.GetAtomMatchSmarts(self.tree, self.mol, 8),
                      "[#1X1H0+0:1]-[#8X2H1+0]-[#6X4H2+0]")
     unfolded = DASHTree.NodePathToQueryMol(self.tree, path, foldHydrogens=False)
-    self.assertIn((0, 1, 2, 8), self.mol.GetSubstructMatches(unfolded, uniquify=False))
+    # the nanobind build returns matches as lists, the boost build as tuples
+    self.assertIn((0, 1, 2, 8),
+                  [tuple(m) for m in self.mol.GetSubstructMatches(unfolded, uniquify=False)])
     folded = DASHTree.NodePathToQueryMol(self.tree, path)
     self.assertTrue(Chem.MolFromSmiles("CCO").HasSubstructMatch(folded))
-
-
-class TestPruneTool(unittest.TestCase):
-  """tools/dash_prune.py, on the synthetic tree."""
-
-  @classmethod
-  def setUpClass(cls):
-    import importlib.util
-    toolPath = os.path.join(RDConfig.RDBaseDir, "Code", "GraphMol", "DASHTree", "tools",
-                            "dash_prune.py")
-    spec = importlib.util.spec_from_file_location("dash_prune", toolPath)
-    cls.prune = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(cls.prune)
-    cls.mol = Chem.AddHs(Chem.MolFromSmiles("CCO"))
-    cls.full = rdDASHTree.DASHTree(_fixturePath(), ["result", "std"])
-    # a mapped container cannot be deleted while a tree holds it, so the
-    # directory outlives the tests rather than each one
-    cls.tmpDir = tempfile.mkdtemp()
-
-  @classmethod
-  def tearDownClass(cls):
-    shutil.rmtree(cls.tmpDir, ignore_errors=True)
-
-  def _pruned(self, *args):
-    out = os.path.join(self.tmpDir, f"{self._testMethodName}.dash")
-    with open(os.devnull, "w") as sink, contextlib.redirect_stdout(sink):
-      self.prune.main([_fixturePath(), out, *args])
-    return rdDASHTree.DASHTree(out, ["result", "std"])
-
-  def testDepthCut(self):
-    tree = self._pruned("--max-level", "1")
-    self.assertEqual(tree.GetNumNodes(), 12)
-    self.assertEqual(tree.GetNumAtomFeatures(), 4)
-    # every descent now ends one level below the root; a hydrogen still finds
-    # its heavy neighbour there, and the charges still sum to the formal charge
-    self.assertEqual(tree.GetPartialChargesDetails(self.mol)["match_depth"], [2] * 9)
-    self.assertEqual([c.GetConAtom() for c in tree.GetRoot(H)], [-1, -1, -1])
-    self.assertAlmostEqual(sum(tree.GetPartialCharges(self.mol)), 0.0, places=12)
-
-  def testMoleculePathsStayExact(self):
-    sdf = os.path.join(self.tmpDir, "ethanol.sdf")
-    with Chem.SDWriter(sdf) as w:
-      w.write(self.mol)
-    tree = self._pruned("--molecules", sdf)
-    # only the nodes ethanol descends through survive, and they are enough
-    self.assertEqual(tree.GetNumNodes(), 15)
-    self.assertEqual(tree.GetPartialCharges(self.mol), self.full.GetPartialCharges(self.mol))
-    for atom in range(self.mol.GetNumAtoms()):
-      self.assertEqual(len(tree.GetAtomNodePath(self.mol, atom)),
-                       len(self.full.GetAtomNodePath(self.mol, atom)))
-
-  def testToleranceCut(self):
-    # Under the O root (-0.60) the H child's subtree (-0.65, -0.70) is within
-    # 0.3 e and goes; the P child (-0.99) is not and stays. Were the H child
-    # simply gone, the O atom's descent would take the P child instead -- its
-    # key matches the neighbouring C -- and read -0.99. The placeholder left in
-    # its place makes the descent stop there and read the root.
-    tree = self._pruned("--tolerance", "0.3")
-    self.assertLess(tree.GetNumNodes(), 18)
-    self.assertEqual(tree.GetAtomNodePath(self.mol, 2), [O, 0, 1])
-    self.assertTrue(math.isnan(tree.GetNode(O, 1).GetValue("result")))
-    self.assertAlmostEqual(tree.GetAtomProperty(self.mol, 2, "result"), -0.60)
 
 
 class TestBundledTree(unittest.TestCase):
@@ -384,16 +198,6 @@ class TestPublishedTree(unittest.TestCase):
   def setUp(self):
     self.tree = rdDASHTree.DASHTree(treeFile, ["result", "std"])
     self.mol = Chem.AddHs(Chem.MolFromSmiles("CC(=O)Nc1ccc(O)cc1"))
-
-  def testChargesSumToFormalCharge(self):
-    self.assertAlmostEqual(sum(self.tree.GetPartialCharges(self.mol)), 0.0, places=12)
-
-  def testEveryPathNodeIsAChildOfTheOneBefore(self):
-    path = self.tree.GetAtomNodePath(self.mol, 0)
-    node = self.tree.GetRoot(path[0])
-    for nodeId in path[2:]:
-      self.assertIn(nodeId, [child.GetId() for child in node])
-      node = self.tree.GetNode(path[0], nodeId)
 
   def testPatternRefindsItsOwnAtom(self):
     for atom in self.mol.GetAtoms():
