@@ -190,16 +190,13 @@ python::list getMolPropertyBatch(const DASH::DASHTree &self,
 }
 
 python::tuple featureToPython(const DASH::AtomFeature &feature) {
-  return python::make_tuple(feature.atomicNum, feature.degree,
-                            feature.formalCharge, feature.conjugated,
-                            feature.numHs);
+  return python::make_tuple(
+      feature.atomicNum, feature.degree, feature.formalCharge,
+      static_cast<bool>(feature.conjugated), feature.numHs);
 }
 
-python::tuple atomFeature(unsigned int index) {
-  if (index >= DASH::numAtomFeatures) {
-    throw_value_error("atom feature index out of range");
-  }
-  return featureToPython(DASH::getAtomFeatureTable()[index]);
+python::tuple treeAtomFeature(const DASH::DASHTree &self, unsigned int index) {
+  return featureToPython(self.getAtomFeature(index));
 }
 
 python::tuple nodeFeature(const DASH::DASHTreeNode &self) {
@@ -221,8 +218,8 @@ DASH::DASHTreeNode nodeGetItem(const DASH::DASHTreeNode &self, int i) {
   return self.getChild(static_cast<unsigned int>(index));
 }
 
-int atomFeatureIndexForAtom(const Atom *atom) {
-  return DASH::atomFeatureIndex(atom);
+int treeAtomFeatureIndex(const DASH::DASHTree &self, const Atom *atom) {
+  return self.getAtomFeatureIndex(atom);
 }
 
 const char *moduleDoc =
@@ -470,18 +467,20 @@ BOOST_PYTHON_MODULE(rdDASHTree) {
            "Returns the value of a property for every atom of every molecule "
            "in\n"
            "a sequence. See GetPartialChargesBatch for the threading "
-           "semantics.\n");
+           "semantics.\n")
 
-  python::def(
-      "GetNumAtomFeatures", +[]() { return DASH::numAtomFeatures; },
-      "Returns the number of atom-feature classes the DASH trees are "
-      "built from.");
-  python::def("GetAtomFeature", atomFeature, python::args("index"),
-              "Returns the atom-feature class with the given branch index as\n"
-              "(atomicNum, degree, formalCharge, conjugated, numHs).\n");
-  python::def("GetAtomFeatureIndex", atomFeatureIndexForAtom,
-              python::args("atom"),
-              "Returns the DASH branch index of an atom, or -1 if its atom "
-              "type\n"
-              "is not one of the classes the DASH trees cover.\n");
+      .def("GetNumAtomFeatures", &DASH::DASHTree::numAtomFeatures,
+           python::args("self"),
+           "Returns the number of atom-feature classes the tree is built "
+           "from,\n"
+           "one per branch.\n")
+      .def("GetAtomFeature", treeAtomFeature,
+           (python::arg("self"), python::arg("index")),
+           "Returns the atom-feature class with the given branch index as\n"
+           "(atomicNum, degree, formalCharge, conjugated, numHs).\n")
+      .def("GetAtomFeatureIndex", treeAtomFeatureIndex,
+           (python::arg("self"), python::arg("atom")),
+           "Returns the branch index of an atom, or -1 if its atom type is "
+           "not\n"
+           "one of the classes this tree covers.\n");
 }

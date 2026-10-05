@@ -16,6 +16,7 @@
 #define RD_DASH_ATOMFEATURES_H
 
 #include <cstdint>
+#include <vector>
 
 namespace RDKit {
 class Atom;
@@ -24,40 +25,51 @@ class ROMol;
 
 namespace DASH {
 
-//! number of atom-feature classes the DASH trees are built from
-const unsigned int numAtomFeatures = 122;
-
-//! \brief one atom-feature class
+//! \brief one atom-feature class, laid out as the container stores it
 /*!
-  The 5-tuple DASH classifies atoms by. Only these combinations occur in the
-  published trees, which is why the branch index is a small integer rather than
-  a hash: an atom whose tuple is not in the table cannot be assigned at all.
+  The 5-tuple DASH classifies atoms by. Which tuples exist is a property of
+  the tree, not of the code: the container carries its table, one entry per
+  branch, and an atom whose tuple is not in it cannot be assigned by that tree
+  at all. The published trees have 122 classes.
 */
 struct RDKIT_DASHTREE_EXPORT AtomFeature {
   std::uint8_t atomicNum;
   std::uint8_t degree;
   std::int8_t formalCharge;
-  bool conjugated;     //!< is any bond of the atom conjugated
-  std::uint8_t numHs;  //!< total Hs, explicit neighbours included
+  std::uint8_t conjugated;  //!< is any bond of the atom conjugated
+  std::uint8_t numHs;       //!< total Hs, explicit neighbours included
+  std::uint8_t reserved[3];
 };
+static_assert(sizeof(AtomFeature) == 8, "AtomFeature is an 8-byte file record");
 
-//! the atom-feature table; \c numAtomFeatures entries, indexed by branch index
-RDKIT_DASHTREE_EXPORT const AtomFeature *getAtomFeatureTable();
-
-//! \brief branch index of an atom-feature tuple, or -1 if it is not in the
-//! table
+//! \brief classifies atoms against the feature table of one tree
 /*!
-  O(1): a 16 kB direct-lookup table over the 14 bits the five components fit
-  into, built once on first use.
+  O(1): a direct-lookup table over the 14 bits the five components fit into
+  (Z <= 63, degree <= 7, charge -1..2, numHs <= 3), built once when the tree is
+  mapped. A table holding a tuple outside that budget is refused.
 */
-RDKIT_DASHTREE_EXPORT int atomFeatureIndex(unsigned int atomicNum,
-                                           unsigned int degree,
-                                           int formalCharge, bool conjugated,
-                                           unsigned int numHs);
+class RDKIT_DASHTREE_EXPORT AtomFeatureLookup {
+ public:
+  AtomFeatureLookup() = default;
+  //! \throws ValueErrorException if a tuple cannot be encoded or occurs twice
+  AtomFeatureLookup(const AtomFeature *features, unsigned int numFeatures);
 
-//! branch index of an atom in a molecule, or -1 if its feature is not in the
-//! table
-RDKIT_DASHTREE_EXPORT int atomFeatureIndex(const Atom *atom);
+  unsigned int size() const { return d_numFeatures; }
+  //! \pre index < size()
+  const AtomFeature &feature(unsigned int index) const {
+    return d_features[index];
+  }
+  //! branch index of a tuple, or -1 if the table has no such class
+  int index(unsigned int atomicNum, unsigned int degree, int formalCharge,
+            bool conjugated, unsigned int numHs) const;
+  //! branch index of an atom in a molecule, or -1
+  int index(const Atom *atom) const;
+
+ private:
+  const AtomFeature *d_features = nullptr;
+  unsigned int d_numFeatures = 0;
+  std::vector<std::int16_t> d_index;
+};
 
 //! \brief the DASH bond descriptor: 4 if conjugated, else the bond order, -1 if
 //! unbonded

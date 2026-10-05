@@ -29,16 +29,18 @@ import unittest
 from rdkit import Chem, RDConfig
 from rdkit.Chem import DASHTree, rdDASHTree
 
-# ethanol with explicit hydrogens is C0 H3 H4 H5, C1 H6 H7, O2 H8; these are the
-# branches its four atom classes classify into (see testFeatureIndices)
-M, P, O, H = 34, 33, 83, 37
+# ethanol with explicit hydrogens is C0 H3 H4 H5, C1 H6 H7, O2 H8. The synthetic
+# tree carries exactly its four atom classes, so these are their branch indices;
+# in the published trees the same classes are branches 34, 33, 83 and 37.
+M, P, O, H = 0, 1, 2, 3
+FEATURES = [(6, 4, 0, False, 3), (6, 4, 0, False, 2), (8, 2, 0, False, 1), (1, 1, 0, False, 0)]
 STOP = 0x01
 NAN = float("nan")
 
-# The synthetic tree. Every branch has a root; these four also have children.
-# A node is (atomFeature, conAtom, conType, firstChild, numChildren, attention,
-# flags, result, std), with firstChild relative to the branch root. The values
-# are arbitrary but distinct, so a wrong node shows up as a wrong number.
+# The synthetic tree, one branch per class. A node is (atomFeature, conAtom,
+# conType, firstChild, numChildren, attention, flags, result, std), with
+# firstChild relative to the branch root. The values are arbitrary but distinct,
+# so a wrong node shows up as a wrong number.
 BRANCHES = {
   # methyl C: C0 -> C1 -> O2 -> H8, with no value on the deepest node so the
   # property walk has to fall back to the O node
@@ -61,13 +63,12 @@ BRANCHES = {
 
 
 def _writeSyntheticTree(path):
-  """Writes BRANCHES as a version 2 '.dash' container, float64 columns."""
-  numBranches, roots, nodes = 122, [], []
+  """Writes BRANCHES as a version 3 '.dash' container, float64 columns."""
+  numBranches, roots, nodes = len(FEATURES), [], []
   for b in range(numBranches):
     base = len(nodes)
     roots.append(base)
-    for feat, conAtom, conType, first, nChildren, attn, flags, result, std in BRANCHES.get(
-        b, [(b, -1, -1, 0, 0, 0.0, 0, NAN, NAN)]):
+    for feat, conAtom, conType, first, nChildren, attn, flags, result, std in BRANCHES[b]:
       key = feat | ((conAtom + 1) << 8) | ((conType + 1) << 12)
       nodes.append((key, nChildren, flags, base + first if nChildren else 0, attn, result, std))
 
@@ -76,17 +77,21 @@ def _writeSyntheticTree(path):
 
   header, entry, n = 128, 48, len(nodes)
   offRoots = alignUp(header + 2 * entry)
-  offNodes = alignUp(offRoots + 4 * numBranches)
+  offFeatures = alignUp(offRoots + 4 * numBranches)
+  offNodes = alignUp(offFeatures + 8 * numBranches)
   offAttn = alignUp(offNodes + 8 * n)
   offResult = alignUp(offAttn + 4 * n)
   offStd = alignUp(offResult + 8 * n)
   size = alignUp(offStd + 8 * n)
   out = bytearray(size)
-  struct.pack_into("<8sIIIIIIdQQQQQQhhh", out, 0, b"DASHTREE", 2, 0xDEADBEEF, numBranches, 2, n, 3,
-                   10.0, offRoots, offNodes, offAttn, 0, header, size, 121, 2, 1)
+  struct.pack_into("<8sIIIIIIdQQQQQQhhhHQ", out, 0, b"DASHTREE", 3, 0xDEADBEEF, numBranches, 2, n,
+                   3, 10.0, offRoots, offNodes, offAttn, 0, header, size, 3, 2, 1, numBranches,
+                   offFeatures)
   for i, (name, off) in enumerate((("result", offResult), ("std", offStd))):
     struct.pack_into("<32sB7xQ", out, header + i * entry, name.encode(), 4, off)
   struct.pack_into(f"<{numBranches}I", out, offRoots, *roots)
+  for i, (z, degree, charge, conjugated, numHs) in enumerate(FEATURES):
+    struct.pack_into("<BBbBB3x", out, offFeatures + 8 * i, z, degree, charge, conjugated, numHs)
   for i, (key, nChildren, flags, first, attn, result, std) in enumerate(nodes):
     struct.pack_into("<HBBI", out, offNodes + 8 * i, key, nChildren, flags, first)
     struct.pack_into("<f", out, offAttn + 4 * i, attn)
@@ -115,13 +120,19 @@ class TestSyntheticTree(unittest.TestCase):
         self.assertEqual(f.read(), g.read())
 
   def testFeatureIndices(self):
-    got = [rdDASHTree.GetAtomFeatureIndex(a) for a in self.mol.GetAtoms()]
+    # the classes come from the table in the file, not from the code
+    self.assertEqual(self.tree.GetNumAtomFeatures(), 4)
+    got = [self.tree.GetAtomFeatureIndex(a) for a in self.mol.GetAtoms()]
     self.assertEqual(got, [M, P, O, H, H, H, H, H, H])
-    self.assertEqual(rdDASHTree.GetAtomFeature(O), (8, 2, 0, False, 1))
+    self.assertEqual([self.tree.GetAtomFeature(i) for i in range(4)], FEATURES)
+    benzene = Chem.AddHs(Chem.MolFromSmiles("c1ccccc1"))
+    self.assertEqual(self.tree.GetAtomFeatureIndex(benzene.GetAtomWithIdx(0)), -1)
+    with self.assertRaises(ValueError):
+      self.tree.GetAtomFeature(4)
 
   def testDescent(self):
-    self.assertEqual(self.tree.GetNumBranches(), 122)
-    self.assertEqual(self.tree.GetNumNodes(), 136)
+    self.assertEqual(self.tree.GetNumBranches(), 4)
+    self.assertEqual(self.tree.GetNumNodes(), 18)
     expected = {
       0: [M, 0, 1, 2, 3],
       1: [P, 0, 1, 3],
@@ -195,7 +206,7 @@ class TestSyntheticTree(unittest.TestCase):
     with self.assertRaises(ValueError):
       root.GetChild(2)
     with self.assertRaises(ValueError):
-      self.tree.GetNode(122, 0)
+      self.tree.GetNode(4, 0)
     with self.assertRaises(ValueError):
       root.GetValue("no_such_property")
 

@@ -98,6 +98,8 @@ struct DASHHeader {
   std::int16_t maxAtomType;
   std::int16_t maxConAtom;
   std::int16_t maxConType;
+  std::uint16_t numFeatures;      //!< rows of the atom-feature table
+  std::uint64_t offFeatureTable;  //!< numFeatures AtomFeature records
 };
 
 static_assert(offsetof(DASHHeader, version) == 8, "DASH header layout");
@@ -106,6 +108,9 @@ static_assert(offsetof(DASHHeader, defaultAttentionThreshold) == 32,
 static_assert(offsetof(DASHHeader, offBranchRoot) == 40, "DASH header layout");
 static_assert(offsetof(DASHHeader, fileSize) == 80, "DASH header layout");
 static_assert(offsetof(DASHHeader, maxAtomType) == 88, "DASH header layout");
+static_assert(offsetof(DASHHeader, numFeatures) == 94, "DASH header layout");
+static_assert(offsetof(DASHHeader, offFeatureTable) == 96,
+              "DASH header layout");
 static_assert(sizeof(DASHHeader) <= dashHeaderSize, "DASH header too big");
 
 //! \brief decodes one IEEE-754 binary16 value
@@ -188,6 +193,8 @@ class DASHTree::Impl {
   const detail::NodeRecord *d_node = nullptr;     //!< numNodes
   const float *d_nodeAttn = nullptr;              //!< numNodes
   const std::uint32_t *d_nodeSourceId = nullptr;  //!< numNodes, may be null
+  //! the tree's atom-feature classes, read from its table
+  AtomFeatureLookup d_features;
 
   std::vector<detail::PropertyColumn> d_properties;
 };

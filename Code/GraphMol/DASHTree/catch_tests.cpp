@@ -35,15 +35,25 @@ std::unique_ptr<ROMol> molWithHs(const std::string &smiles) {
 }  // namespace
 
 TEST_CASE("DASH atom features", "[DASHTree]") {
-  // the feature table is generated from the published tree, so check it
-  // against molecules rather than against itself
+  // the classes are a property of the tree, read from the table it carries;
+  // the synthetic tree has four of them
+  const char *rdbase = std::getenv("RDBASE");
+  REQUIRE(rdbase != nullptr);
+  DASH::DASHTree tree(
+      std::string(rdbase) +
+          "/Code/GraphMol/DASHTree/test_data/dash_test_tree.dash",
+      {"result"});
+  REQUIRE(tree.numAtomFeatures() == 4);
   auto ethanol = molWithHs("CCO");
-  CHECK(DASH::atomFeatureIndex(ethanol->getAtomWithIdx(0)) ==
-        DASH::atomFeatureIndex(6, 4, 0, false, 3));
-  CHECK(DASH::atomFeatureIndex(ethanol->getAtomWithIdx(2)) ==
-        DASH::atomFeatureIndex(8, 2, 0, false, 1));
-  // an atom the trees do not cover must say so rather than misclassify
-  CHECK(DASH::atomFeatureIndex(14, 4, 0, false, 0) == -1);  // silicon
+  CHECK(tree.getAtomFeatureIndex(ethanol->getAtomWithIdx(0)) ==
+        tree.getAtomFeatureIndex(6, 4, 0, false, 3));
+  CHECK(tree.getAtomFeatureIndex(ethanol->getAtomWithIdx(2)) ==
+        tree.getAtomFeatureIndex(8, 2, 0, false, 1));
+  CHECK(tree.getAtomFeature(2).atomicNum == 8);
+  // an atom the tree does not cover must say so rather than misclassify
+  CHECK(tree.getAtomFeatureIndex(14, 4, 0, false, 0) == -1);  // silicon
+  CHECK(tree.getAtomFeatureIndex(6, 3, 0, true, 1) == -1);    // aromatic CH
+  CHECK_THROWS_AS(tree.getAtomFeature(4), ValueErrorException);
   CHECK(DASH::dashBondType(molWithHs("c1ccccc1")->getBondBetweenAtoms(0, 1)) ==
         4);
 }
@@ -156,21 +166,21 @@ TEST_CASE("DASH assignment", "[DASHTree]") {
 
 TEST_CASE("DASH integration on the synthetic tree", "[DASHTree]") {
   // test_data/dash_test_tree.dash is written by rdkit/Chem/UnitTestDASHTree.py
-  // and checked in: 122 branches, four of them with children, knowing ethanol
-  // and nothing else. Its values are made up, so this checks the machinery --
-  // the descent, the property fallback, the stop flag, the normalisations and
-  // the node API -- rather than any chemistry.
+  // and checked in: the four atom classes of ethanol and nothing else. Its
+  // values are made up, so this checks the machinery -- the descent, the
+  // property fallback, the stop flag, the normalisations and the node API --
+  // rather than any chemistry.
   const char *rdbase = std::getenv("RDBASE");
   REQUIRE(rdbase != nullptr);
   DASH::DASHTree tree(
       std::string(rdbase) +
           "/Code/GraphMol/DASHTree/test_data/dash_test_tree.dash",
       {"result", "std"});
-  CHECK(tree.numBranches() == 122);
-  CHECK(tree.numNodes() == 136);
+  CHECK(tree.numBranches() == 4);
+  CHECK(tree.numNodes() == 18);
   auto mol = molWithHs("CCO");  // C0 H3 H4 H5, C1 H6 H7, O2 H8
-  const std::uint32_t M = 34, P = 33, O = 83, H = 37;  // its four atom classes
-  REQUIRE(DASH::atomFeatureIndex(mol->getAtomWithIdx(2)) ==
+  const std::uint32_t M = 0, P = 1, O = 2, H = 3;  // its four atom classes
+  REQUIRE(tree.getAtomFeatureIndex(mol->getAtomWithIdx(2)) ==
           static_cast<int>(O));
 
   // every atom descends where the tree says, hydrogens through their neighbour
@@ -239,7 +249,7 @@ TEST_CASE("DASH integration on the synthetic tree", "[DASHTree]") {
   CHECK(first.getChild(0).getId() == 3);
   CHECK(std::isnan(tree.getNode(M, 3).getValue("result")));
   CHECK_THROWS_AS(root.getChild(2), ValueErrorException);
-  CHECK_THROWS_AS(tree.getNode(122, 0), ValueErrorException);
+  CHECK_THROWS_AS(tree.getNode(4, 0), ValueErrorException);
 
   // a threaded batch agrees with the single call, and a null entry is empty
   std::vector<std::vector<double>> batch;

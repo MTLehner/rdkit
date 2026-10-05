@@ -17,10 +17,12 @@ default MBIS charge tree is `serenityff/charge/data/default_dash_tree`, and the
 tree with all properties lands in `serenityff/charge/data/additional_data/dashProps`
 when the package downloads it.
 
-The converter needs `numpy`, `pandas` and `pytables`. It does not need the
-DASH-tree package: the one fact it has to know about the tree, which branch is
-the hydrogen class, it reads off the data and only cross-checks against the
-package when that is importable.
+The converter needs `numpy`, `pandas` and `pytables`, not the DASH-tree package.
+The container carries the tree's atom-feature table, one class per branch; the
+published trees' 122 classes are embedded in the converter as the default, and a
+tree built on another feature list is given with `--features` (a JSON list of
+`[Z, degree, charge, conjugated, numHs]`). The data has to agree with the table
+on which branch is the hydrogen class, so a wrong list is caught.
 
 ```
 python Code/GraphMol/DASHTree/tools/dash_convert.py <tree_folder> default.dash
@@ -34,7 +36,8 @@ package's node numbering (226 MB for the default tree, ~100 s). Options:
 | `--props result,std` | keep only these columns; the default tree's `size` column is read by nobody |
 | `--no-source-ids` | omit the map back to the python numbering; only the exactness tests read it |
 | `--float32` | narrow float64 columns (AM1BCC, RESP, DFTD4, ...) to float32: half the size, no longer bit-exact against python |
-| `--hydrogen-branch N` | override the branch read off the data |
+| `--features FILE` | the atom-feature list the tree was built on, if not the published one |
+| `--hydrogen-branch N` | override the hydrogen class, which is otherwise the one with Z = 1 |
 
 The charges-only container to distribute:
 

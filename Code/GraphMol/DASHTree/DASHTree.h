@@ -51,6 +51,7 @@
 #include "AtomFeatures.h"
 
 namespace RDKit {
+class Atom;
 class ROMol;
 
 namespace DASH {
@@ -138,6 +139,23 @@ class RDKIT_DASHTREE_EXPORT DASHTree {
     against the python implementation.
   */
   bool hasSourceNodeIds() const;
+
+  // -------------------------------------------------------------------------
+  //  the atom-feature classes, which the file carries
+  // -------------------------------------------------------------------------
+  //! number of atom-feature classes the tree is built from, one per branch
+  unsigned int numAtomFeatures() const;
+  //! \brief the class with the given branch index
+  /*!
+    \throws ValueErrorException if \p index is out of range
+  */
+  const AtomFeature &getAtomFeature(unsigned int index) const;
+  //! branch index of an atom, or -1 if its tuple is none of the tree's classes
+  int getAtomFeatureIndex(const Atom *atom) const;
+  //! branch index of a feature tuple, or -1
+  int getAtomFeatureIndex(unsigned int atomicNum, unsigned int degree,
+                          int formalCharge, bool conjugated,
+                          unsigned int numHs) const;
 
   // -------------------------------------------------------------------------
   //  a single atom
@@ -318,7 +336,7 @@ class RDKIT_DASHTREE_EXPORT DASHTreeNode {
   A file written by a newer converter than the library understands is rejected
   rather than misread.
 */
-const std::uint32_t dashFormatVersion = 2;
+const std::uint32_t dashFormatVersion = 3;
 
 }  // namespace DASH
 }  // namespace RDKit

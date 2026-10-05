@@ -173,6 +173,27 @@ DASHTree::Impl::Impl(const std::string &filename,
           "' is corrupt: branch roots out of range or out of order");
     }
   }
+  // the atom-feature table: one class per branch, and every key names one
+  if (d_header.numFeatures != d_header.numBranches) {
+    throw ValueErrorException(
+        "'" + filename + "' is corrupt: " +
+        std::to_string(d_header.numFeatures) + " atom-feature classes for " +
+        std::to_string(d_header.numBranches) + " branches");
+  }
+  if (d_header.maxAtomType >= static_cast<int>(d_header.numFeatures)) {
+    throw ValueErrorException(
+        "'" + filename + "' is corrupt: a node names atom feature " +
+        std::to_string(d_header.maxAtomType) + ", the table has " +
+        std::to_string(d_header.numFeatures));
+  }
+  const auto *featureTable = reinterpret_cast<const AtomFeature *>(resolve(
+      d_header.offFeatureTable, d_header.numFeatures * sizeof(AtomFeature),
+      alignof(AtomFeature), "the atom-feature table"));
+  try {
+    d_features = AtomFeatureLookup(featureTable, d_header.numFeatures);
+  } catch (const ValueErrorException &e) {
+    throw ValueErrorException("'" + filename + "': " + e.what());
+  }
 
   // resolve the requested property columns
   const bool wantAll = properties.empty();
@@ -277,7 +298,7 @@ void MolMatcher::setMolecule(const ROMol &mol) {
 
   for (unsigned int i = 0; i < d_numAtoms; ++i) {
     const Atom *atom = mol.getAtomWithIdx(i);
-    const int feature = atomFeatureIndex(atom);
+    const int feature = d_tree.d_features.index(atom);
     if (feature < 0) {
       throw ValueErrorException(
           "DASH cannot assign atom " + std::to_string(i) + " (" +
@@ -285,7 +306,7 @@ void MolMatcher::setMolecule(const ROMol &mol) {
           ", charge " + std::to_string(atom->getFormalCharge()) + ", " +
           std::to_string(atom->getTotalNumHs(true)) +
           " H): its atom type is not one of the " +
-          std::to_string(numAtomFeatures) + " the DASH trees cover");
+          std::to_string(d_tree.d_features.size()) + " this tree covers");
     }
     d_feature[i] = feature;
     d_nbrStart[i + 1] = atom->getDegree();
@@ -359,7 +380,7 @@ std::uint32_t MolMatcher::match(unsigned int atomIdx,
   // implementation's does when a caller passes 0 or 1
   int maxDepth = static_cast<int>(params.maxDepth);
 
-  if (getAtomFeatureTable()[branch].atomicNum == 1) {
+  if (d_tree.d_features.feature(branch).atomicNum == 1) {
     // Hydrogens are only ever matched implicitly, through the numHs component
     // of their heavy neighbour's feature: the descent starts at the heavy atom
     // and spends one level getting there, without accumulating its attention.
@@ -500,6 +521,30 @@ DASHTree::~DASHTree() = default;
 
 unsigned int DASHTree::numBranches() const {
   return d_impl->d_header.numBranches;
+}
+
+unsigned int DASHTree::numAtomFeatures() const {
+  return d_impl->d_features.size();
+}
+
+const AtomFeature &DASHTree::getAtomFeature(unsigned int index) const {
+  if (index >= d_impl->d_features.size()) {
+    throw ValueErrorException("atom feature " + std::to_string(index) +
+                              " is out of range; the tree has " +
+                              std::to_string(d_impl->d_features.size()));
+  }
+  return d_impl->d_features.feature(index);
+}
+
+int DASHTree::getAtomFeatureIndex(const Atom *atom) const {
+  return d_impl->d_features.index(atom);
+}
+
+int DASHTree::getAtomFeatureIndex(unsigned int atomicNum, unsigned int degree,
+                                  int formalCharge, bool conjugated,
+                                  unsigned int numHs) const {
+  return d_impl->d_features.index(atomicNum, degree, formalCharge, conjugated,
+                                  numHs);
 }
 
 std::uint64_t DASHTree::numNodes() const { return d_impl->d_header.numNodes; }
@@ -659,12 +704,12 @@ int DASHTreeNode::getAtomFeatureIndex() const { return keyAtomType(getKey()); }
 
 const AtomFeature &DASHTreeNode::getFeature() const {
   const int index = getAtomFeatureIndex();
-  if (index >= static_cast<int>(numAtomFeatures)) {
+  if (index >= static_cast<int>(dp_impl->d_features.size())) {
     throw ValueErrorException("node " + std::to_string(getId()) +
                               " names atom feature " + std::to_string(index) +
                               ", which does not exist");
   }
-  return getAtomFeatureTable()[index];
+  return dp_impl->d_features.feature(index);
 }
 
 int DASHTreeNode::getConAtom() const { return keyConAtom(getKey()); }

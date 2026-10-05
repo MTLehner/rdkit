@@ -32,13 +32,19 @@ Two decisions shape the container it writes:
   * A node's match key, child range and stop flag live in one 8-byte record, so
     a descent step is a single dependent load.
 
+The container also carries the tree's atom-feature table, one class per branch,
+which is what the C++ classifies atoms with. The published trees were built on
+the 122 classes of the DASH-tree package's ``AtomFeatures.feature_list``, which
+is embedded below as the default; a tree built on another list needs
+``--features`` (a JSON list of ``[Z, degree, charge, conjugated, numHs]``).
+
 The hydrogen branch matters: the first descent step out of its root walks to the
 heavy neighbour without accumulating attention, and the precomputed stop flags
-depend on that. It is read off the data -- the hydrogen root is the only root
-whose children attach with con_atom = -1 -- and cross-checked against the
-DASH-tree package when that happens to be importable. Nothing here needs it.
+depend on that. It is the class with Z = 1, and the data has to agree: the
+hydrogen root is the only root whose children attach with con_atom = -1, so a
+tree built on a different feature list than the one given is caught here.
 
-Requires numpy, pandas and pytables.
+Requires numpy, pandas and pytables; nothing from the DASH-tree package.
 
 Usage:
     python dash_convert.py <tree_folder> <out.dash> [--props result,std,...]
@@ -46,6 +52,7 @@ Usage:
 
 import argparse
 import gzip
+import json
 import os
 import pickle
 import struct
@@ -54,8 +61,47 @@ import sys
 import numpy as np
 
 MAGIC = b"DASHTREE"
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 ENDIAN_ID = 0xDEADBEEF
+
+# (atomicNum, degree, formalCharge, conjugated, numHs) of the published trees'
+# 122 classes, in branch order: serenityff.charge.tree.atom_features
+# .AtomFeatures.feature_list. The order is part of those trees' data.
+STANDARD_FEATURES = [
+    (5, 1, 0, 0, 2), (5, 3, -1, 1, 0), (5, 3, 0, 0, 0), (5, 3, 0, 0, 2),
+    (5, 4, -1, 0, 0), (5, 4, -1, 0, 2), (35, 1, 0, 0, 0), (6, 1, -1, 0, 0),
+    (6, 1, -1, 1, 0), (6, 1, 0, 0, 1), (6, 1, 0, 0, 2), (6, 1, 0, 0, 3),
+    (6, 1, 0, 1, 1), (6, 2, -1, 1, 1), (6, 2, 0, 0, 0), (6, 2, 0, 0, 1),
+    (6, 2, 0, 0, 2), (6, 2, 0, 1, 0), (6, 2, 0, 1, 1), (6, 3, -1, 0, 0),
+    (6, 3, -1, 1, 0), (6, 3, -1, 0, 1), (6, 3, -1, 1, 1), (6, 3, 0, 0, 0),
+    (6, 3, 0, 0, 1), (6, 3, 0, 0, 2), (6, 3, 0, 1, 0), (6, 3, 0, 1, 1),
+    (6, 3, 0, 1, 2), (6, 3, 1, 0, 0), (6, 3, 1, 1, 0), (6, 4, 0, 0, 0),
+    (6, 4, 0, 0, 1), (6, 4, 0, 0, 2), (6, 4, 0, 0, 3), (17, 1, 0, 0, 0),
+    (9, 1, 0, 0, 0), (1, 1, 0, 0, 0), (53, 1, 0, 0, 0), (53, 3, 0, 0, 0),
+    (53, 3, 0, 0, 1), (53, 4, 0, 0, 0), (7, 1, -1, 0, 0), (7, 1, -1, 1, 0),
+    (7, 1, 0, 0, 0), (7, 1, 0, 1, 0), (7, 1, 0, 1, 1), (7, 1, 0, 1, 2),
+    (7, 1, 1, 0, 3), (7, 2, -1, 0, 0), (7, 2, -1, 0, 1), (7, 2, -1, 1, 0),
+    (7, 2, -1, 1, 1), (7, 2, 0, 0, 0), (7, 2, 0, 0, 1), (7, 2, 0, 1, 0),
+    (7, 2, 0, 1, 1), (7, 2, 1, 0, 0), (7, 2, 1, 0, 1), (7, 2, 1, 0, 2),
+    (7, 2, 1, 1, 0), (7, 2, 1, 1, 1), (7, 3, 0, 0, 0), (7, 3, 0, 0, 1),
+    (7, 3, 0, 0, 2), (7, 3, 0, 1, 0), (7, 3, 0, 1, 1), (7, 3, 0, 1, 2),
+    (7, 3, 1, 0, 0), (7, 3, 1, 0, 1), (7, 3, 1, 1, 0), (7, 3, 1, 1, 1),
+    (7, 4, 1, 0, 0), (7, 4, 1, 0, 1), (7, 4, 1, 0, 2), (7, 4, 1, 0, 3),
+    (8, 1, -1, 0, 0), (8, 1, -1, 1, 0), (8, 1, 0, 0, 0), (8, 1, 0, 0, 1),
+    (8, 1, 0, 1, 0), (8, 1, 0, 1, 1), (8, 2, 0, 0, 0), (8, 2, 0, 0, 1),
+    (8, 2, 0, 0, 2), (8, 2, 0, 1, 0), (8, 2, 0, 1, 1), (8, 2, 0, 1, 2),
+    (8, 2, 1, 0, 0), (8, 2, 1, 0, 1), (8, 2, 1, 1, 0), (8, 3, 1, 0, 0),
+    (8, 3, 1, 0, 1), (15, 1, 0, 0, 1), (15, 2, 0, 0, 0), (15, 2, 0, 0, 1),
+    (15, 2, 0, 1, 0), (15, 3, 0, 0, 0), (15, 4, 0, 0, 0), (15, 4, 0, 0, 1),
+    (15, 4, 0, 1, 0), (15, 4, 0, 1, 1), (15, 4, 1, 0, 0), (15, 5, 0, 0, 0),
+    (15, 5, 0, 0, 1), (16, 1, -1, 0, 0), (16, 1, -1, 1, 0), (16, 1, 0, 0, 0),
+    (16, 1, 0, 1, 0), (16, 2, 0, 0, 0), (16, 2, 0, 1, 0), (16, 2, 0, 0, 1),
+    (16, 2, 1, 1, 0), (16, 3, 0, 0, 0), (16, 3, 0, 1, 0), (16, 3, 1, 1, 0),
+    (16, 3, 1, 0, 0), (16, 4, 0, 0, 0), (16, 4, 0, 0, 1), (16, 4, 0, 1, 0),
+    (16, 4, 1, 0, 0), (16, 4, 1, 1, 0),
+]
+FEATURE_DTYPE = np.dtype([("atomicNum", "u1"), ("degree", "u1"), ("formalCharge", "i1"),
+                          ("conjugated", "u1"), ("numHs", "u1"), ("reserved", "3u1")])
 
 HEADER_SIZE = 128
 PROP_ENTRY_SIZE = 48
@@ -115,19 +161,20 @@ def looks_like_hydrogen_root(tree):
     return bool(children) and all(int(tree[c][2]) == -1 for c in children)
 
 
-def hydrogen_branch_from_package(n_branches):
-    """The hydrogen branch according to the DASH-tree package: None if the
-    package is not importable, -1 if its feature list has no hydrogen class
-    among the first n_branches entries."""
-    try:
-        sys.path.insert(0, os.environ.get("DASH_TREE_REPO", ""))
-        from serenityff.charge.tree.atom_features import AtomFeatures
-    except ImportError:
-        return None
-    for i, f in enumerate(AtomFeatures.feature_list[:n_branches]):
-        if f[0] == HYDROGEN:
-            return i
-    return -1
+def load_features(path):
+    """A feature list from a JSON file: [[Z, degree, charge, conjugated, numHs], ...]."""
+    with open(path) as f:
+        raw = json.load(f)
+    features = []
+    for i, row in enumerate(raw):
+        if len(row) != 5:
+            sys.exit(f"{path}: feature {i} is not a 5-tuple: {row}")
+        z, degree, charge, conjugated, num_hs = row
+        if not (0 <= z <= 255 and 0 <= degree <= 255 and -128 <= charge <= 127
+                and conjugated in (0, 1, False, True) and 0 <= num_hs <= 255):
+            sys.exit(f"{path}: feature {i} is out of range: {row}")
+        features.append((int(z), int(degree), int(charge), int(bool(conjugated)), int(num_hs)))
+    return features
 
 
 def main(argv=None):
@@ -145,9 +192,13 @@ def main(argv=None):
                     help="omit the map back to the python package's node numbering. "
                          "It is never read unless a caller asks for it, and the "
                          "bit-exactness tests do.")
+    ap.add_argument("--features", default=None,
+                    help="JSON file with the atom-feature list the tree was built "
+                         "on, one [Z, degree, charge, conjugated, numHs] per branch "
+                         "(default: the 122 classes of the published trees)")
     ap.add_argument("--hydrogen-branch", type=int, default=None,
                     help="branch index of the hydrogen feature class "
-                         "(default: read it off the data)")
+                         "(default: the class with Z = 1)")
     args = ap.parse_args(argv)
 
     import pandas as pd
@@ -180,35 +231,37 @@ def main(argv=None):
         del tree
     n_nodes = int(branch_n.sum())
 
+    features = load_features(args.features) if args.features else STANDARD_FEATURES
+    if len(features) != n_branches:
+        sys.exit(f"the feature list has {len(features)} classes but the tree has "
+                 f"{n_branches} branches; pass --features with the list the tree "
+                 f"was built on")
+    if len(set(features)) != len(features):
+        sys.exit("the feature list contains the same class twice")
+    h_from_table = [i for i, f in enumerate(features) if f[0] == HYDROGEN]
     if args.hydrogen_branch is not None:
         h_branch = args.hydrogen_branch
         if not 0 <= h_branch < n_branches:
             sys.exit(f"--hydrogen-branch {h_branch} is not a branch of this tree")
-        origin = "given"
-        if h_candidates and h_branch not in h_candidates:
-            print(f"WARNING: --hydrogen-branch {h_branch}, but the data says "
+        if h_branch not in h_from_table or (h_candidates and h_branch not in h_candidates):
+            print(f"WARNING: --hydrogen-branch {h_branch}, but the feature table "
+                  f"puts hydrogen at {h_from_table} and the data at "
                   f"{h_candidates}", file=sys.stderr)
-    elif len(h_candidates) == 1:
-        h_branch = h_candidates[0]
-        origin = "from the data"
+    elif len(h_from_table) == 1:
+        h_branch = h_from_table[0]
+        if h_candidates != [h_branch]:
+            sys.exit(f"the feature table puts hydrogen at branch {h_branch}, but "
+                     f"the roots whose children attach with con_atom = -1 are "
+                     f"{h_candidates}: the tree was built on a different feature "
+                     f"list than the one given; pass --features")
     else:
-        sys.exit(f"could not read the hydrogen branch off the data: "
-                 f"{len(h_candidates)} roots have children that all attach with "
-                 f"con_atom = -1 ({h_candidates}); pass --hydrogen-branch (it "
-                 f"decides where the attention accumulation starts, so it must "
-                 f"be right)")
-    from_package = hydrogen_branch_from_package(n_branches)
-    if from_package is None:
-        note = "no DASH-tree package importable to cross-check"
-    elif from_package == h_branch:
-        note = "the DASH-tree package agrees"
-    else:
-        print(f"WARNING: using hydrogen branch {h_branch}, but the importable "
-              f"DASH-tree package says {from_package}; the tree may have been "
-              f"built with a different feature list than the package you have "
-              f"installed.", file=sys.stderr)
-        note = f"the importable DASH-tree package says {from_package}"
-    print(f"hydrogen branch: {h_branch} ({origin}; {note})")
+        sys.exit(f"the feature list has {len(h_from_table)} classes with Z = 1 "
+                 f"({h_from_table}); pass --hydrogen-branch (it decides where "
+                 f"the attention accumulation starts, so it must be right)")
+    print(f"hydrogen branch: {h_branch}")
+    feature_table = np.zeros(n_branches, dtype=FEATURE_DTYPE)
+    for i, (z, degree, charge, conjugated, num_hs) in enumerate(features):
+        feature_table[i] = (z, degree, charge, conjugated, num_hs, (0, 0, 0))
     if n_nodes > MAX_NODES:
         sys.exit(f"{n_nodes} nodes exceeds the container's 32-bit node ids")
     branch_root = np.zeros(n_branches, dtype=np.uint32)
@@ -322,8 +375,8 @@ def main(argv=None):
                 min_con_atom = min(min_con_atom, ca)
                 max_con_type = max(max_con_type, ct)
                 min_con_type = min(min_con_type, ct)
-                if not 0 <= at <= MAX_ATOM_TYPE:
-                    sys.exit(f"atom_type {at} does not fit {KEY_ATOM_BITS} bits")
+                if not 0 <= at < n_branches:
+                    sys.exit(f"atom_type {at} is not one of the {n_branches} classes")
                 if not -1 <= ca <= MAX_CON_ATOM:
                     sys.exit(f"con_atom {ca} does not fit {KEY_CON_ATOM_BITS} bits")
                 if not -1 <= ct <= MAX_CON_TYPE:
@@ -373,6 +426,7 @@ def main(argv=None):
     assert records.itemsize == NODE_RECORD_SIZE, records.itemsize
 
     blocks = [("branchRoot", branch_root),
+              ("featureTable", feature_table),
               ("nodeRecord", records),
               ("nodeAttn", node_attn[:n_nodes])]
     if not args.no_source_ids:
@@ -396,6 +450,7 @@ def main(argv=None):
             offsets["branchRoot"], offsets["nodeRecord"], offsets["nodeAttn"],
             have_source, prop_dir_off, file_size))
         f.write(struct.pack("<hhh", max_atom_type, max_con_atom, max_con_type))
+        f.write(struct.pack("<HQ", n_branches, offsets["featureTable"]))
         f.write(b"\0" * (HEADER_SIZE - f.tell()))
 
         for col, dt in zip(props, prop_dtypes):
