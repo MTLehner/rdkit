@@ -19,6 +19,7 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <RDGeneral/BoostStartInclude.h>
@@ -209,7 +210,7 @@ class DASHTree::Impl {
 */
 class MolMatcher {
  public:
-  explicit MolMatcher(const DASHTree::Impl &tree) : d_tree(tree) {}
+  explicit MolMatcher(const DASHTree::Impl &tree) : d_tree(tree), d_live(1) {}
 
   //! \brief prepares for \p mol: feature classes, neighbour lists, partial keys
   /*!
@@ -229,8 +230,9 @@ class MolMatcher {
 
   //! node ids of the last match, root first
   const std::vector<std::uint32_t> &path() const { return d_path; }
-  //! molecule atoms of the last match, in the order the descent added them
-  const std::vector<std::uint32_t> &subgraph() const { return d_subgraph; }
+  //! molecule atoms of the last match, in the order the descent added them;
+  //! where atoms tied all the way down, one of the equivalent matches
+  const std::vector<std::uint32_t> &subgraph() const { return d_live[0].atoms; }
 
   //! \brief the deepest value on the last match's path, NaN if there is none
   /*!
@@ -242,13 +244,36 @@ class MolMatcher {
   unsigned int numAtoms() const { return d_numAtoms; }
 
  private:
-  //! first child of \p node whose key matches a live candidate
-  bool pickChild(std::uint32_t node, std::uint32_t &childNode,
-                 std::uint32_t &childAtom);
-  //! appends the not-yet-seen neighbours of the subgraph atom at \p position
-  void addCandidates(std::uint32_t position);
-  //! retires the candidate for \p atomIdx, which has just joined the subgraph
-  void retireCandidate(std::uint32_t atomIdx);
+  //! one way of laying the path matched so far onto the molecule
+  struct Embedding {
+    std::vector<std::uint32_t> atoms;     //!< matched atoms, insertion order
+    std::vector<std::uint16_t> candKey;   //!< noMatchKey once consumed
+    std::vector<std::uint32_t> candAtom;  //!< atoms that could join next
+    //! one bit per molecule atom: matched, or already a candidate
+    std::vector<std::uint64_t> seen;
+    //! bloom filter over the live candidate keys; rejects most children in
+    //! one test
+    std::uint64_t candFilter = 0;
+
+    //! marks \p atom seen; returns whether it already was
+    bool see(std::uint32_t atom) {
+      const std::uint64_t bit = 1ull << (atom & 63u);
+      const bool was = seen[atom >> 6] & bit;
+      seen[atom >> 6] |= bit;
+      return was;
+    }
+  };
+
+  //! descends one level; false if no child of the last node matches
+  bool step(bool legacyTieBreaking);
+  //! fills d_matches with the live candidates carrying \p key
+  void findMatches(std::uint16_t key, bool legacyTieBreaking);
+  //! makes one embedding of the next level per entry of d_matches
+  void advance();
+  //! binds candidate \p cand of \p embedding
+  void extend(Embedding &embedding, std::uint32_t cand) const;
+  //! appends the not-yet-seen neighbours of the atom matched at \p position
+  void addCandidates(Embedding &embedding, std::uint32_t position) const;
 
   const DASHTree::Impl &d_tree;
   unsigned int d_numAtoms = 0;
@@ -259,16 +284,15 @@ class MolMatcher {
   std::vector<std::uint32_t> d_nbrAtom;   //!< 2 * numBonds
   std::vector<std::uint16_t> d_nbrKey;    //!< 2 * numBonds, partial match keys
 
-  // per-atom scratch
+  // per-atom scratch: the embeddings still alive, the first d_numLive of
+  // d_live; the next level's are built in d_next. The unused ones keep their
+  // buffers for reuse.
   std::vector<std::uint32_t> d_path;
-  std::vector<std::uint32_t> d_subgraph;  //!< matched atoms, insertion order
-  std::vector<std::uint16_t> d_candKey;   //!< noMatchKey once consumed
-  std::vector<std::uint32_t> d_candAtom;
-  std::vector<std::uint32_t> d_seen;  //!< generation stamps, O(1) to clear
-  std::uint32_t d_generation = 0;
-  //! bloom filter over the live candidate keys; rejects most children in one
-  //! test
-  std::uint64_t d_candFilter = 0;
+  std::vector<Embedding> d_live;
+  std::vector<Embedding> d_next;
+  std::size_t d_numLive = 1;
+  //! (embedding, candidate) pairs that take the next node
+  std::vector<std::pair<std::uint32_t, std::uint32_t>> d_matches;
 };
 
 }  // namespace DASH

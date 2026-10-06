@@ -62,6 +62,12 @@ std::string propertyEntryName(const char *entry) {
   return std::string(buf);
 }
 
+//! Bound on the embeddings one descent keeps alive. Atoms that look alike
+//! multiply them: a dozen at most for drug-like molecules, about a hundred for
+//! tetraphenylmethane. Embeddings past the bound are dropped, the one place
+//! where the atom order could still reach the result.
+constexpr std::size_t maxEmbeddings = 256;
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -293,8 +299,6 @@ void MolMatcher::setMolecule(const ROMol &mol) {
   d_numAtoms = mol.getNumAtoms();
   d_feature.resize(d_numAtoms);
   d_nbrStart.assign(d_numAtoms + 1, 0);
-  d_seen.assign(d_numAtoms, 0);
-  d_generation = 0;
 
   for (unsigned int i = 0; i < d_numAtoms; ++i) {
     const Atom *atom = mol.getAtomWithIdx(i);
@@ -317,8 +321,9 @@ void MolMatcher::setMolecule(const ROMol &mol) {
   d_nbrAtom.resize(d_nbrStart[d_numAtoms]);
   d_nbrKey.resize(d_nbrStart[d_numAtoms]);
 
-  // The neighbour list is walked in RDKit's own order, which the match depends
-  // on: where two candidates carry the same key, the earlier one is bound.
+  // The neighbour list is walked in RDKit's own order, which only the legacy
+  // tie-breaking depends on: there, of two candidates carrying the same key,
+  // the earlier one is bound.
   for (unsigned int i = 0; i < d_numAtoms; ++i) {
     const Atom *atom = mol.getAtomWithIdx(i);
     std::uint32_t at = d_nbrStart[i];
@@ -333,33 +338,105 @@ void MolMatcher::setMolecule(const ROMol &mol) {
   }
 }
 
-// The nesting here IS the algorithm, and getting it the wrong way round is not
-// a small error: the first child *in tree order* that matches any live
-// candidate wins, and among the candidates carrying that child's key the
-// earliest one is bound. Iterating candidates on the outside -- the natural
-// shape if you were tempted to sort the children by key and binary-search --
-// picks a different node for the great majority of atoms.
-bool MolMatcher::pickChild(std::uint32_t node, std::uint32_t &childNode,
-                           std::uint32_t &childAtom) {
-  const NodeRecord &record = d_tree.d_node[node];
+// The next node is the first child, in tree order, that any live embedding can
+// extend to. The tree's builder created a node's children in falling order of
+// attention, so that is the best-attended continuation. Every candidate
+// carrying the child's key is bound, each in its own copy of the embedding:
+// atoms that look alike so far -- the two CH2 next to an isoindoline NH, the
+// ortho carbons of a ring -- stay in play until the tree tells them apart. So
+// the result does not depend on the atom order, and symmetry-equivalent atoms
+// get the same value. With legacyTieBreaking only the first candidate is
+// bound, as the DASH-tree python package does.
+//
+// The nesting matters: children outside, candidates inside. Iterating the
+// candidates on the outside -- the natural shape if you were tempted to sort
+// the children by key and binary-search -- picks a different node for the
+// great majority of atoms.
+bool MolMatcher::step(bool legacyTieBreaking) {
+  const NodeRecord &record = d_tree.d_node[d_path.back()];
   const std::uint32_t first = record.firstChild;
   const std::uint32_t last = first + record.numChildren;
-  const std::size_t nCand = d_candKey.size();
+  std::uint64_t filter = 0;
+  for (std::size_t i = 0; i < d_numLive; ++i) {
+    filter |= d_live[i].candFilter;
+  }
   for (std::uint32_t child = first; child < last; ++child) {
     const std::uint16_t key = d_tree.d_node[child].key;
     // one test throws out most children before the candidate scan
-    if (!((d_candFilter >> (key & 63u)) & 1u)) {
+    if (!((filter >> (key & 63u)) & 1u)) {
       continue;
     }
-    for (std::size_t c = 0; c < nCand; ++c) {
-      if (d_candKey[c] == key) {
-        childNode = child;
-        childAtom = d_candAtom[c];
-        return true;
-      }
+    findMatches(key, legacyTieBreaking);
+    if (!d_matches.empty()) {
+      d_path.push_back(child);
+      advance();
+      return true;
     }
   }
   return false;
+}
+
+void MolMatcher::findMatches(std::uint16_t key, bool legacyTieBreaking) {
+  d_matches.clear();
+  for (std::uint32_t i = 0; i < d_numLive; ++i) {
+    const Embedding &embedding = d_live[i];
+    bool terminalFound = false;
+    for (std::uint32_t c = 0; c < embedding.candKey.size(); ++c) {
+      if (embedding.candKey[c] != key) {
+        continue;
+      }
+      // Degree-one candidates with the same key hang off the same atom by the
+      // same bond, so they are interchangeable and one stands for all.
+      const std::uint32_t atom = embedding.candAtom[c];
+      const bool terminal = d_nbrStart[atom + 1] - d_nbrStart[atom] == 1;
+      if (terminal && terminalFound) {
+        continue;
+      }
+      terminalFound |= terminal;
+      d_matches.emplace_back(i, c);
+      if (legacyTieBreaking || d_matches.size() == maxEmbeddings) {
+        return;
+      }
+    }
+  }
+}
+
+void MolMatcher::advance() {
+  const std::size_t numMatches = d_matches.size();
+  if (numMatches == 1) {
+    // the usual case: one embedding carries on, extended in place
+    const std::uint32_t from = d_matches[0].first;
+    if (from) {
+      std::swap(d_live[0], d_live[from]);
+    }
+    extend(d_live[0], d_matches[0].second);
+    d_numLive = 1;
+    return;
+  }
+  if (d_next.size() < numMatches) {
+    d_next.resize(numMatches);
+  }
+  for (std::size_t m = 0; m < numMatches; ++m) {
+    const std::uint32_t from = d_matches[m].first;
+    // an embedding's last match takes it over; only earlier ones copy it
+    if (m + 1 < numMatches && d_matches[m + 1].first == from) {
+      d_next[m] = d_live[from];
+    } else {
+      std::swap(d_next[m], d_live[from]);
+    }
+    extend(d_next[m], d_matches[m].second);
+  }
+  std::swap(d_live, d_next);
+  d_numLive = numMatches;
+}
+
+void MolMatcher::extend(Embedding &embedding, std::uint32_t cand) const {
+  embedding.atoms.push_back(embedding.candAtom[cand]);
+  // The consumed candidate stays seen, but its key is retired so it cannot be
+  // bound twice.
+  embedding.candKey[cand] = noMatchKey;
+  addCandidates(embedding,
+                static_cast<std::uint32_t>(embedding.atoms.size() - 1));
 }
 
 std::uint32_t MolMatcher::match(unsigned int atomIdx,
@@ -370,11 +447,13 @@ std::uint32_t MolMatcher::match(unsigned int atomIdx,
 
   d_path.clear();
   d_path.push_back(root);
-  d_subgraph.clear();
-  d_candKey.clear();
-  d_candAtom.clear();
-  d_candFilter = 0;
-  ++d_generation;
+  d_numLive = 1;
+  Embedding &start = d_live[0];
+  start.atoms.clear();
+  start.candKey.clear();
+  start.candAtom.clear();
+  start.seen.assign((d_numAtoms + 63) / 64, 0);
+  start.candFilter = 0;
 
   // signed, so the hydrogen decrement below behaves the way the reference
   // implementation's does when a caller passes 0 or 1
@@ -391,39 +470,25 @@ std::uint32_t MolMatcher::match(unsigned int atomIdx,
                     "hydrogen of unexpected degree");
     const std::uint32_t heavy = d_nbrAtom[nbrLo];
     const std::uint16_t heavyKey = packMatchKey(d_feature[heavy], -1, -1);
-    d_candKey.push_back(heavyKey);
-    d_candAtom.push_back(heavy);
-    d_candFilter |= 1ull << (heavyKey & 63u);
-
-    std::uint32_t childNode, childAtom;
-    if (!pickChild(root, childNode, childAtom)) {
+    start.see(heavy);
+    start.candKey.push_back(heavyKey);
+    start.candAtom.push_back(heavy);
+    start.candFilter |= 1ull << (heavyKey & 63u);
+    if (!step(params.legacyTieBreaking)) {
       // no node in the tree describes this hydrogen's environment
       d_path.clear();
       return branch;
     }
-    d_path.push_back(childNode);
-    d_subgraph.push_back(heavy);
-    d_seen[heavy] = d_generation;
     --maxDepth;
-
-    d_candKey.clear();
-    d_candAtom.clear();
-    d_candFilter = 0;
   } else {
-    d_subgraph.push_back(atomIdx);
-    d_seen[atomIdx] = d_generation;
+    start.see(atomIdx);
+    start.atoms.push_back(atomIdx);
+    addCandidates(start, 0);
   }
 
   if (maxDepth <= 1) {
     return branch;
   }
-
-  // Candidates are maintained incrementally rather than rebuilt at every level.
-  // That is order-identical to a rebuild: an atom's position in the matched
-  // subgraph never changes once it joins, candidates are emitted grouped by
-  // that position, and the newest atom always has the highest one -- so its
-  // neighbours belong at the end of the list either way.
-  addCandidates(0);
 
   // The stop flag in each node record is the answer to "is the attention
   // accumulated down to here past the threshold?", precomputed by the
@@ -437,19 +502,10 @@ std::uint32_t MolMatcher::match(unsigned int atomIdx,
 
   double cumulativeAttention = 0.0;
   for (int depth = 1; depth < maxDepth; ++depth) {
-    std::uint32_t childNode, childAtom;
-    if (!pickChild(d_path.back(), childNode, childAtom)) {
+    if (!step(params.legacyTieBreaking)) {
       break;
     }
-    d_path.push_back(childNode);
-    const std::uint32_t position =
-        static_cast<std::uint32_t>(d_subgraph.size());
-    d_subgraph.push_back(childAtom);
-    // The consumed candidate keeps its "seen" stamp -- it is in the subgraph
-    // now, so it stays ineligible -- but its key is retired so it cannot be
-    // bound twice.
-    retireCandidate(childAtom);
-    addCandidates(position);
+    const std::uint32_t childNode = d_path.back();
 
     // Both tests are strict and both come after the step has been taken, so
     // the node that crosses the threshold stays on the path and is the first
@@ -472,30 +528,26 @@ std::uint32_t MolMatcher::match(unsigned int atomIdx,
   return branch;
 }
 
-void MolMatcher::addCandidates(std::uint32_t position) {
-  const std::uint32_t atomIdx = d_subgraph[position];
+// Candidates are maintained incrementally rather than rebuilt at every level.
+// That is order-identical to a rebuild: an atom's position in the matched
+// subgraph never changes once it joins, candidates are emitted grouped by that
+// position, and the newest atom always has the highest one -- so its
+// neighbours belong at the end of the list either way.
+void MolMatcher::addCandidates(Embedding &embedding,
+                               std::uint32_t position) const {
+  const std::uint32_t atomIdx = embedding.atoms[position];
   const std::uint32_t lo = d_nbrStart[atomIdx];
   const std::uint32_t hi = d_nbrStart[atomIdx + 1];
   for (std::uint32_t n = lo; n < hi; ++n) {
     const std::uint32_t nbr = d_nbrAtom[n];
-    if (d_seen[nbr] == d_generation) {
+    if (embedding.see(nbr)) {
       continue;
     }
-    d_seen[nbr] = d_generation;
     const std::uint16_t key =
         withConAtom(d_nbrKey[n], static_cast<int>(position));
-    d_candKey.push_back(key);
-    d_candAtom.push_back(nbr);
-    d_candFilter |= 1ull << (key & 63u);
-  }
-}
-
-void MolMatcher::retireCandidate(std::uint32_t atomIdx) {
-  for (std::size_t c = 0; c < d_candAtom.size(); ++c) {
-    if (d_candAtom[c] == atomIdx && d_candKey[c] != noMatchKey) {
-      d_candKey[c] = noMatchKey;
-      return;
-    }
+    embedding.candKey.push_back(key);
+    embedding.candAtom.push_back(nbr);
+    embedding.candFilter |= 1ull << (key & 63u);
   }
 }
 

@@ -307,7 +307,7 @@ BOOST_PYTHON_MODULE(rdDASHTree) {
       python::scope().attr("Normalization");
 
   python::class_<DASH::DASHParams>(
-      "DASHParams", "Controls how far a subgraph match descends into the tree.",
+      "DASHParams", "Controls how a subgraph match descends into the tree.",
       python::init<>(python::args("self")))
       .def_readwrite("maxDepth", &DASH::DASHParams::maxDepth,
                      "maximum number of tree levels to descend (default 16)")
@@ -318,7 +318,13 @@ BOOST_PYTHON_MODULE(rdDASHTree) {
       .def_readwrite("attentionIncrementThreshold",
                      &DASH::DASHParams::attentionIncrementThreshold,
                      "stop once a single step contributes less attention than "
-                     "this (default 0.0)");
+                     "this (default 0.0)")
+      .def_readwrite(
+          "legacyTieBreaking", &DASH::DASHParams::legacyTieBreaking,
+          "where several atoms fit the next node, take the first in atom "
+          "order, as the DASH-tree python package does, instead of following "
+          "each until the tree tells them apart; the result then depends on "
+          "the atom order (default False)");
 
   python::class_<DASH::NormalizationOptions>(
       "NormalizationOptions",

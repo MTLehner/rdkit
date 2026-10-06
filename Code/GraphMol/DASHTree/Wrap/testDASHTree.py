@@ -12,8 +12,9 @@
 Most run against test_data/dash_test_tree.dash, a synthetic tree written by
 rdkit/Chem/UnitTestDASHTree.py that knows ethanol and nothing else: its values
 are made up, so what it exercises is the machinery -- the descent, the property
-fallback, the stop flag, the normalisations, the node API. A published tree is
-a couple of hundred megabytes and not in the repository, so the tests that need
+fallback, the stop flag, the normalisations, the node API. TestTies needs real
+chemistry and uses the pruned tree in Data/DASHTree. A published tree is a
+couple of hundred megabytes and not in the repository, so the tests that need
 one are skipped unless DASH_TREE_FILE points at a container.
 """
 
@@ -219,6 +220,66 @@ class TestSyntheticTree(unittest.TestCase):
       self.tree.GetNode(4, 0)
     with self.assertRaises(ValueError):
       root.GetValue("no_such_property")
+
+
+class TestTies(unittest.TestCase):
+  """Atoms that fit the same node, on the pruned tree in Data/DASHTree."""
+
+  @classmethod
+  def setUpClass(cls):
+    cls.tree = rdDASHTree.DASHTree(
+      os.path.join(RDConfig.RDDataDir, 'DASHTree', 'default_pruned.dash'), ['result', 'std'])
+    cls.legacy = rdDASHTree.DASHParams()
+    cls.legacy.legacyTieBreaking = True
+
+  def classValues(self, mol, params=None):
+    """raw values by symmetry class, which any atom order agrees on"""
+    values = self.tree.GetMolProperty(mol, 'result', params or rdDASHTree.DASHParams())
+    classes = {}
+    for atom, rank in enumerate(Chem.CanonicalRankAtoms(mol, breakTies=False)):
+      classes.setdefault(rank, []).append(values[atom])
+    return {rank: sorted(v) for rank, v in classes.items()}
+
+  def testSymmetricAtomsAgree(self):
+    # pyridine's meta carbons and naphthalene's beta carbons, which the
+    # legacy rule tells apart by their atom order
+    options = rdDASHTree.NormalizationOptions()
+    options.params.legacyTieBreaking = True
+    for smiles, atoms in (('c1ccncc1', (1, 5)), ('c1ccc2ccccc2c1', (0, 1, 5, 6))):
+      mol = molWithHs(smiles)
+      charges = self.tree.GetPartialCharges(mol)
+      self.assertEqual(len({charges[i] for i in atoms}), 1, smiles)
+      charges = self.tree.GetPartialCharges(mol, options)
+      self.assertGreater(len({charges[i] for i in atoms}), 1, smiles)
+
+  def testAtomOrderDoesNotMatter(self):
+    # the two CH2 next to 5-aminoisoindoline's ring NH look alike for five
+    # levels, and under the legacy rule the SMILES decides which comes first
+    first, second = (molWithHs(s) for s in ('Nc1ccc2CNCc2c1', 'Nc1ccc2c(c1)CNC2'))
+    self.assertEqual(self.classValues(first), self.classValues(second))
+    self.assertNotEqual(self.classValues(first, self.legacy),
+                        self.classValues(second, self.legacy))
+    params = Chem.SmilesParserParams()
+    params.removeHs = False
+    sdf = os.path.join(TEST_DATA_DIR, 'dash_ref_mols.sdf')
+    for mol in list(Chem.SDMolSupplier(sdf, removeHs=False))[:20]:
+      expected = self.classValues(mol)
+      for smiles in Chem.MolToRandomSmilesVect(mol, 3, randomSeed=42):
+        self.assertEqual(self.classValues(Chem.MolFromSmiles(smiles, params)), expected, smiles)
+
+  def testTheBetterAttendedChildWins(self):
+    # the legacy descents of the two SMILES part at two children of one node;
+    # both now take the earlier child, which has the higher attention
+    first, second = (molWithHs(s) for s in ('Nc1ccc2CNCc2c1', 'Nc1ccc2c(c1)CNC2'))
+    paths = [list(self.tree.GetAtomNodePath(first, 6, self.legacy)),
+             list(self.tree.GetAtomNodePath(second, 8, self.legacy))]
+    level = next(i for i, (a, b) in enumerate(zip(*paths)) if a != b)
+    earlier, later = sorted(paths, key=lambda path: path[level])
+    self.assertGreaterEqual(
+      self.tree.GetNode(earlier[0], earlier[level]).GetAttention(),
+      self.tree.GetNode(later[0], later[level]).GetAttention())
+    self.assertEqual(list(self.tree.GetAtomNodePath(first, 6)), earlier)
+    self.assertEqual(list(self.tree.GetAtomNodePath(second, 8)), earlier)
 
 
 @needsTree
@@ -428,6 +489,8 @@ class TestReferenceAgreement(unittest.TestCase):
     cache = {}
     for i, mol in enumerate(mols):
       options = rdDASHTree.ChargeOptions()
+      # the package takes the first of several atoms that fit a node
+      options.params.legacyTieBreaking = True
       options.normalization = rdDASHTree.ChargeNormalization.NONE
       details = tree.GetPartialChargesDetails(mol, options)
       entry = dict(details)

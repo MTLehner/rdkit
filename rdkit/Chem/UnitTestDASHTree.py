@@ -165,14 +165,17 @@ class TestBundledTree(unittest.TestCase):
   def testChargesStayCloseToThePythonPackage(self):
     # test_data/dash_ref_values.txt holds what the DASH-tree python package
     # computes with the full tree; pruning at 0.02 e was measured to move the
-    # std-weighted charges by 0.0065 e RMS and 0.044 e at most
+    # std-weighted charges by 0.0065 e RMS and 0.044 e at most. The package
+    # takes the first of several atoms that fit a node, hence the legacy rule.
     testData = os.path.join(RDConfig.RDBaseDir, "Code", "GraphMol", "DASHTree", "test_data")
     mols = [
       m for m in Chem.SDMolSupplier(os.path.join(testData, "dash_ref_mols.sdf"), removeHs=False)
       if m is not None
     ]
     self.assertEqual(len(mols), 100)
-    charges = [self.tree.GetPartialCharges(m) for m in mols]
+    options = rdDASHTree.NormalizationOptions()
+    options.params.legacyTieBreaking = True
+    charges = [self.tree.GetPartialCharges(m, options) for m in mols]
     diffs = []
     with open(os.path.join(testData, "dash_ref_values.txt")) as f:
       for line in f:

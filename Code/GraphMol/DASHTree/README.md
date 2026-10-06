@@ -7,8 +7,10 @@ descent stops carries the value. It is the method of the python
 [DASH-tree](https://github.com/rinikerlab/DASH-tree) package
 ([JCIM 2023](https://pubs.acs.org/doi/full/10.1021/acs.jcim.3c00800),
 [J. Chem. Phys. 2024](https://doi.org/10.1063/5.0218154)), reimplemented here
-in C++ with the same results to the last bit, a few hundred times faster, and
-reading its tree from a memory-mapped file instead of 3 GB of heap.
+in C++, a few hundred times faster, and reading its tree from a memory-mapped
+file instead of 3 GB of heap. It gives the package's results to the last bit,
+except where several atoms fit the same node, which it handles differently on
+purpose; see the section of that name.
 
 The tree is data, not code. It lives in a `.dash` container, RDKit's own format,
 whose layout is defined by the structs in `DASHTreeImpl.h` and mirrored in
@@ -30,7 +32,7 @@ charges = tree.GetPartialCharges(mol)                      # one float per atom,
 With no argument `GetDASHTree()` uses `$RDKIT_DASH_TREE` if set and otherwise
 the tree in `Data/DASHTree`, and says so once. That tree is the legacy MBIS
 charge tree pruned to 38 MB, see below; its charges stay within 0.044 e of the
-full tree's (0.0065 e RMS), and it carries the `result` and `std` columns only.
+full tree's (0.0067 e RMS), and it carries the `result` and `std` columns only.
 For the full tree, or for properties other than MBIS charges, convert one and
 pass it in, as a path or an http(s) URL that is fetched once into a cache:
 
@@ -86,10 +88,10 @@ to the sibling. Measured on the MBIS tree over 118 molecules:
 
 | `--tolerance` | container | RMSD | max error |
 |---|---|---|---|
-| 0.01 e | 63.7 MB | 0.0034 e | 0.033 e |
-| 0.02 e (shipped) | 38.2 MB | 0.0065 e | 0.044 e |
-| 0.05 e | 14.3 MB | 0.014 e | 0.059 e |
-| 0.1 e | 4.2 MB | 0.024 e | 0.13 e |
+| 0.01 e | 63.7 MB | 0.0035 e | 0.036 e |
+| 0.02 e (shipped) | 38.2 MB | 0.0067 e | 0.044 e |
+| 0.05 e | 14.3 MB | 0.014 e | 0.058 e |
+| 0.1 e | 4.2 MB | 0.024 e | 0.10 e |
 
 `Data/DASHTree/default_pruned.dash` is the 0.02 e output of the two commands
 above, the most accurate tree under GitHub's 50 MB per-file warning (22 MB as
@@ -162,6 +164,28 @@ The library target is `DASHTree`, gated on `RDK_USE_BOOST_IOSTREAMS` for the
 memory mapping. A tree is immutable once opened and safe to query from any
 number of threads.
 
+## Atoms that fit the same node
+
+Each level of the descent binds an atom carrying the key of the next node: its
+atom class, the matched atom it hangs off, and the bond. Sometimes several
+atoms do, like the two CH2 next to the ring NH of 5-aminoisoindoline, or the
+ortho carbons of a ring. The descent then follows each of them until the tree
+tells them apart, and takes the child that comes first; a node's children are
+in falling order of the attention they were built with. So the result does not
+depend on the atom order, and symmetry-equivalent atoms get the same value.
+
+The DASH-tree package binds the first such atom in atom order instead, so two
+SMILES of one molecule can get different values, and so can pyridine's two
+meta carbons. `DASHParams.legacyTieBreaking` does the same, for exact agreement
+with the package; over the 100 reference molecules the two rules put
+std-weighted charges 0.011 e apart RMS, 0.24 e at most.
+
+```python
+options = rdDASHTree.ChargeOptions()
+options.params.legacyTieBreaking = True
+charges = tree.GetPartialCharges(mol, options)      # the DASH-tree package's values
+```
+
 ## Layout and tests
 
 ```
@@ -174,6 +198,7 @@ test_data/              a 1 kB synthetic tree; 100 molecules with the python pac
 tools/                  dash_convert.py (legacy tree -> container), dash_prune.py, the format module they share
 ```
 
-`catch_tests.cpp` and `rdkit/Chem/UnitTestDASHTree.py` run against the
-synthetic tree and the shipped one. Point `DASH_TREE_FILE` at a converted full
-tree to also run the tests that compare against the python package exactly.
+`catch_tests.cpp`, `Wrap/testDASHTree.py` and `rdkit/Chem/UnitTestDASHTree.py`
+run against the synthetic tree and the shipped one. Point `DASH_TREE_FILE` at a
+converted full tree to also run the tests that compare against the python
+package exactly.

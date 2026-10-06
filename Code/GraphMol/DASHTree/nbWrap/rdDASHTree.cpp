@@ -89,8 +89,7 @@ NB_MODULE(rdDASHTree, m) {
   m.attr("ChargeNormalization") = m.attr("Normalization");
 
   nb::class_<DASH::DASHParams>(
-      m, "DASHParams",
-      "Controls how far a subgraph match descends into the tree.")
+      m, "DASHParams", "Controls how a subgraph match descends into the tree.")
       .def(nb::init<>())
       .def_rw("maxDepth", &DASH::DASHParams::maxDepth,
               "maximum number of tree levels to descend (default 16)")
@@ -100,7 +99,12 @@ NB_MODULE(rdDASHTree, m) {
       .def_rw("attentionIncrementThreshold",
               &DASH::DASHParams::attentionIncrementThreshold,
               "stop once a single step contributes less attention than this "
-              "(default 0.0)");
+              "(default 0.0)")
+      .def_rw("legacyTieBreaking", &DASH::DASHParams::legacyTieBreaking,
+              "where several atoms fit the next node, take the first in atom "
+              "order, as the DASH-tree python package does, instead of "
+              "following each until the tree tells them apart; the result "
+              "then depends on the atom order (default False)");
 
   nb::class_<DASH::NormalizationOptions>(
       m, "NormalizationOptions",

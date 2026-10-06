@@ -285,3 +285,34 @@ TEST_CASE("DASH integration on the synthetic tree", "[DASHTree]") {
   CHECK_THROWS_AS(tree.getPartialCharges(*molWithHs("c1ccccc1"), charges),
                   ValueErrorException);
 }
+
+TEST_CASE("DASH atoms that fit the same node", "[DASHTree]") {
+  // On the pruned tree in Data/DASHTree. Pyridine's meta carbons look alike
+  // all the way down; the two CH2 next to 5-aminoisoindoline's ring NH look
+  // alike for five levels. The legacy rule takes the first in atom order.
+  const char *rdbase = std::getenv("RDBASE");
+  REQUIRE(rdbase != nullptr);
+  DASH::DASHTree tree(
+      std::string(rdbase) + "/Data/DASHTree/default_pruned.dash",
+      {"result", "std"});
+  DASH::ChargeOptions legacy;
+  legacy.params.legacyTieBreaking = true;
+
+  std::vector<double> charges;
+  auto pyridine = molWithHs("c1ccncc1");
+  tree.getPartialCharges(*pyridine, charges);
+  CHECK(charges[1] == charges[5]);
+  tree.getPartialCharges(*pyridine, charges, legacy);
+  CHECK(charges[1] != charges[5]);
+
+  // the ring NH is atom 6 of one SMILES and atom 8 of the other
+  auto first = molWithHs("Nc1ccc2CNCc2c1");
+  auto second = molWithHs("Nc1ccc2c(c1)CNC2");
+  std::vector<std::uint32_t> firstPath, secondPath;
+  tree.getAtomNodePath(*first, 6, firstPath);
+  tree.getAtomNodePath(*second, 8, secondPath);
+  CHECK(firstPath == secondPath);
+  tree.getAtomNodePath(*first, 6, firstPath, legacy.params);
+  tree.getAtomNodePath(*second, 8, secondPath, legacy.params);
+  CHECK(firstPath != secondPath);
+}

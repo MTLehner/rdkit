@@ -59,7 +59,7 @@ namespace DASH {
 
 class DASHTreeNode;
 
-//! \brief controls how far a subgraph match descends
+//! \brief controls how a subgraph match descends
 struct RDKIT_DASHTREE_EXPORT DASHParams {
   //! maximum number of tree levels to descend
   unsigned int maxDepth = 16;
@@ -67,6 +67,10 @@ struct RDKIT_DASHTREE_EXPORT DASHParams {
   double attentionThreshold = 10.0;
   //! stop once a single step contributes less attention than this
   double attentionIncrementThreshold = 0.0;
+  //! where several atoms fit the next node, take the first in atom order, as
+  //! the DASH-tree python package does, instead of following each until the
+  //! tree tells them apart; the result then depends on the atom order
+  bool legacyTieBreaking = false;
 };
 
 //! \brief how per-atom values are made to sum to a molecule-wide target
